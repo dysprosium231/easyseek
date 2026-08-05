@@ -1,0 +1,4 @@
+interface:
+  display_name: "ScanSci Find"
+  short_description: "Auditable multi-source academic discovery and evidence search."
+  default_prompt: "Use $scansci-find to plan and run a transparent multi-source academic search with coverage, citation, and evidence artifacts."

@@ -1,0 +1,19 @@
+{
+  "name": "scansci-find",
+  "version": "0.2.0",
+  "description": "ScanSci Find plugin for domain-neutral, auditable academic discovery.",
+  "author": {
+    "name": "ScanSci contributors"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "ScanSci Find",
+    "shortDescription": "Auditable multi-source academic discovery for every discipline.",
+    "longDescription": "ScanSci Find distributes a domain-neutral academic search skill and MCP entrypoint with source routing, citation chasing, coverage and PRISMA reports, Journal Scout venue evidence, Zotero exports, and ScanSci PDF-ready queues.",
+    "developerName": "ScanSci contributors",
+    "category": "Research",
+    "capabilities": ["MCP", "Skill", "CLI"],
+    "defaultPrompt": "Use ScanSci Find to plan and run an auditable multi-source academic search, report coverage, and prepare references and full-text queues."
+  },
+  "mcpServers": "./.mcp.json"
+}

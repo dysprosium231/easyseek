@@ -1,0 +1,18 @@
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+build/
+dist/
+*.egg-info/
+runs/
+wheelhouse/
+.env
+.env.*
+!.env.example
+
+
+# Search-run artifacts and downloaded papers
+papers/
