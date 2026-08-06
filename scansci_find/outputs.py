@@ -6,6 +6,7 @@ import re
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional
 
+from scansci_find.adapters import normalize_arxiv_id
 from scansci_find.audit import (
     build_human_queue,
     coverage_report,
@@ -19,7 +20,7 @@ def download_entry(candidate: Dict[str, Any], strategy: str = "oa_first") -> Dic
     identifier = candidate.get("doi") or candidate.get("arxiv_id") or ""
     if not identifier:
         return {}
-    return {
+    entry: Dict[str, Any] = {
         "identifier": identifier,
         "identifier_type": "doi" if candidate.get("doi") else "arxiv",
         "title": candidate.get("title") or "",
@@ -28,6 +29,14 @@ def download_entry(candidate: Dict[str, Any], strategy: str = "oa_first") -> Dic
         "recommended_strategy": strategy,
         "queue": True,
     }
+    preprint_identifiers = []
+    for version in candidate.get("preprint_versions") or []:
+        arxiv_id = normalize_arxiv_id(version.get("arxiv_id"))
+        if arxiv_id and not any(item.get("value") == arxiv_id for item in preprint_identifiers):
+            preprint_identifiers.append({"type": "arxiv", "value": arxiv_id, "url": version.get("url") or ""})
+    if preprint_identifiers:
+        entry["preprint_identifiers"] = preprint_identifiers
+    return entry
 
 
 def enrich_download_metadata(candidates: Iterable[Dict[str, Any]], strategy: str = "oa_first") -> List[Dict[str, Any]]:
@@ -90,6 +99,7 @@ def render_papers_md(candidates: Iterable[Dict[str, Any]], query: str) -> str:
                 f"- Year: {candidate.get('year') or '-'}",
                 f"- DOI: {candidate.get('doi') or '-'}",
                 f"- arXiv: {candidate.get('arxiv_id') or '-'}",
+                f"- Preprint: {(candidate.get('links') or {}).get('preprint') or '-'}",
                 f"- Sources: {', '.join(candidate.get('source_hits') or [])}",
                 f"- Evidence: {evidence or '-'}",
                 "",
@@ -247,6 +257,7 @@ def write_outputs(
     citation_report: Optional[Dict[str, Any]] = None,
     verification_report: Optional[Dict[str, Any]] = None,
     oa_report: Optional[Dict[str, Any]] = None,
+    preprint_report: Optional[Dict[str, Any]] = None,
     estimate_report: Optional[Dict[str, Any]] = None,
     smoke_report: Optional[Dict[str, Any]] = None,
     calibration_report: Optional[Dict[str, Any]] = None,
@@ -318,6 +329,7 @@ def write_outputs(
     (out_dir / "citation_rounds.json").write_text(json.dumps(citation_report or {}, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "identifier_verification.json").write_text(json.dumps(verification_report or {}, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "oa_report.json").write_text(json.dumps(oa_report or {}, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out_dir / "preprint_report.json").write_text(json.dumps(preprint_report or {}, ensure_ascii=False, indent=2), encoding="utf-8")
     if estimate_report is not None:
         (out_dir / "estimate_report.json").write_text(json.dumps(estimate_report, ensure_ascii=False, indent=2), encoding="utf-8")
     if smoke_report is not None:

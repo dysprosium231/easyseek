@@ -47,6 +47,33 @@ class OaResolver:
         }
 
 
+class PreprintFinder:
+    def _candidate_skippable(self, candidate):
+        return False
+
+    def find(self, candidate, per_source_limit=5):
+        return (
+            [
+                {
+                    "source": "arXiv",
+                    "server": "arXiv",
+                    "title": candidate.get("title") or "",
+                    "url": "https://arxiv.org/abs/2401.12345",
+                    "pdf_url": "https://arxiv.org/pdf/2401.12345",
+                    "arxiv_id": "2401.12345",
+                    "doi": "",
+                    "pmcid": "",
+                    "year": candidate.get("year"),
+                    "title_similarity": 0.95,
+                    "first_author_match": True,
+                    "year_match": True,
+                    "match": True,
+                }
+            ],
+            {"arxiv": {"searched": 1, "errored": 0}},
+        )
+
+
 class ServiceEnrichmentTests(unittest.TestCase):
     def test_search_can_verify_identifiers_and_resolve_oa_in_one_run(self):
         candidate = normalize_crossref_work(
@@ -91,6 +118,48 @@ class ServiceEnrichmentTests(unittest.TestCase):
         self.assertEqual(row["links"]["pdf"], "https://repository.example/paper.pdf")
         self.assertEqual(row["evidence_dimensions"]["identity"]["verification_status"], "verified")
         self.assertEqual(row["access"]["license"], "cc-by")
+
+    def test_search_can_find_preprints_for_paywalled_candidates(self):
+        candidate = normalize_crossref_work(
+            {
+                "title": ["Urban Heat Study"],
+                "author": [{"given": "Ada", "family": "Li"}],
+                "issued": {"date-parts": [[2025]]},
+                "DOI": "10.1000/heat",
+                "container-title": ["Example Journal"],
+            }
+        )
+        retrieval = {
+            "candidates": [candidate],
+            "source_status": [
+                {
+                    "name": "crossref",
+                    "status": "ok",
+                    "count": 1,
+                    "pagination_complete": True,
+                }
+            ],
+            "query_variants": ["urban heat"],
+        }
+        service = ScanSciFindService(
+            journal_gateway=JournalGateway(),
+            preprint_finder=PreprintFinder(),
+        )
+
+        with patch("scansci_find.service.search_query_variants_with_status", return_value=retrieval):
+            result = service.search_academic(
+                "urban heat",
+                depth="quick",
+                sources=["crossref"],
+                find_preprints=True,
+            )
+
+        row = result["candidates"][0]
+        self.assertEqual(result["preprint_report"]["matched"], 1)
+        self.assertEqual(row["links"]["preprint"], "https://arxiv.org/abs/2401.12345")
+        self.assertEqual(row["access"]["fulltext_hint"], "preprint")
+        self.assertEqual(row["preprint_versions"][0]["arxiv_id"], "2401.12345")
+        self.assertEqual(row["evidence_dimensions"]["availability"]["fulltext_hint"], "preprint")
 
 
 if __name__ == "__main__":

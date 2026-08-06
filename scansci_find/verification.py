@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import difflib
+import os
 import re
 import unicodedata
 from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -156,6 +158,23 @@ class IdentifierVerifier:
         return out
 
 
+def _verification_workers(items: int) -> int:
+    """Resolve the thread pool size for per-candidate verification.
+
+    Shares SCANSCI_FIND_SEARCH_WORKERS with the source loops; a value of 1
+    forces the serial path. Lookup providers are stateless per call, so a
+    shared verifier instance is safe across threads.
+    """
+    raw = str(os.environ.get("SCANSCI_FIND_SEARCH_WORKERS") or "").strip()
+    try:
+        requested = int(raw) if raw else 0
+    except ValueError:
+        requested = 0
+    if requested:
+        return max(1, min(requested, max(1, items)))
+    return min(8, max(1, items))
+
+
 def verify_identifiers(
     candidates: Iterable[Dict[str, Any]],
     *,
@@ -166,10 +185,19 @@ def verify_identifiers(
     rows = [dict(candidate) for candidate in candidates]
     selected = rows if limit is None else rows[: max(0, int(limit))]
     counts: Counter[str] = Counter()
-    for candidate in selected:
+
+    def run_one(candidate: Dict[str, Any]) -> str:
         report = verifier.verify(candidate)
         candidate["identifier_verification"] = report
-        counts[str(report.get("status") or "unknown")] += 1
+        return str(report.get("status") or "unknown")
+
+    workers = _verification_workers(len(selected))
+    if workers <= 1:
+        statuses = [run_one(candidate) for candidate in selected]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            statuses = list(pool.map(run_one, selected))
+    counts.update(statuses)
     return {
         "candidates": rows,
         "checked": len(selected),

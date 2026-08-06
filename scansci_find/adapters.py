@@ -4,6 +4,7 @@ import base64
 import math
 import json
 import os
+from concurrent.futures import ThreadPoolExecutor
 import re
 import shlex
 import subprocess
@@ -1050,6 +1051,23 @@ def all_providers() -> Dict[str, HttpProvider]:
     return providers
 
 
+def executor_workers(items: int) -> int:
+    """Resolve the thread pool size for source loops.
+
+    SCANSCI_FIND_SEARCH_WORKERS overrides the default (parallel up to 8
+    workers); a value of 1 forces the serial path (useful for debugging and
+    for callers that rely on strictly sequential provider calls).
+    """
+    raw = str(os.environ.get("SCANSCI_FIND_SEARCH_WORKERS") or "").strip()
+    try:
+        requested = int(raw) if raw else 0
+    except ValueError:
+        requested = 0
+    if requested:
+        return max(1, min(requested, max(1, items)))
+    return min(8, max(1, items))
+
+
 def search_sources_with_status(
     query: str,
     sources: Iterable[str],
@@ -1057,43 +1075,49 @@ def search_sources_with_status(
     providers: Optional[Dict[str, HttpProvider]] = None,
 ) -> Dict[str, Any]:
     available = providers or all_providers()
-    candidates: List[Candidate] = []
-    source_status: List[Dict[str, Any]] = []
+    requested = list(dict.fromkeys(str(source).strip() for source in sources if str(source).strip()))
     per_source = max(1, limit)
-    for source in sources:
+
+    def run_one(source: str) -> tuple[List[Candidate], Dict[str, Any]]:
         started = time.perf_counter()
         provider = available.get(source)
         if provider is None:
-            source_status.append({"name": source, "status": "missing", "count": 0, "message": "source is not configured", "elapsed_ms": 0})
-            continue
+            return [], {"name": source, "status": "missing", "count": 0, "message": "source is not configured", "elapsed_ms": 0}
         try:
             if hasattr(provider, "last_search_metadata"):
                 provider.last_search_metadata = {}
             rows = provider.search(query, per_source)
-            candidates.extend(rows)
             metadata = dict(getattr(provider, "last_search_metadata", {}) or {})
-            source_status.append(
-                {
-                    "name": source,
-                    "status": "ok",
-                    "count": len(rows),
-                    "message": "",
-                    "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
-                    "pagination_complete": bool(metadata.get("pagination_complete")),
-                    "retrieval": metadata,
-                }
-            )
+            return rows, {
+                "name": source,
+                "status": "ok",
+                "count": len(rows),
+                "message": "",
+                "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+                "pagination_complete": bool(metadata.get("pagination_complete")),
+                "retrieval": metadata,
+            }
         except Exception as exc:
-            source_status.append(
-                {
-                    "name": source,
-                    "status": getattr(exc, "status", "error"),
-                    "count": 0,
-                    "error_type": type(exc).__name__,
-                    "message": str(exc),
-                    "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
-                }
-            )
+            return [], {
+                "name": source,
+                "status": getattr(exc, "status", "error"),
+                "count": 0,
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+            }
+
+    workers = executor_workers(len(requested))
+    if workers <= 1:
+        results = [run_one(source) for source in requested]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(run_one, requested))
+    candidates: List[Candidate] = []
+    source_status: List[Dict[str, Any]] = []
+    for rows, status in results:
+        candidates.extend(rows)
+        source_status.append(status)
     return {"candidates": candidates, "source_status": source_status}
 
 
@@ -1109,52 +1133,54 @@ def estimate_sources_with_status(
     """Run the smallest real request needed to estimate source hit counts."""
 
     available = providers or all_providers()
-    estimates = []
-    source_status = []
-    for source in dict.fromkeys(str(item).strip() for item in sources if str(item).strip()):
+    requested = list(dict.fromkeys(str(item).strip() for item in sources if str(item).strip()))
+
+    def run_one(source: str) -> tuple[Dict[str, Any], Dict[str, Any]]:
         started = time.perf_counter()
         provider = available.get(source)
         if provider is None:
             status = {"name": source, "status": "missing", "count": 0, "message": "source is not configured", "elapsed_ms": 0}
-            source_status.append(status)
-            estimates.append({"source": source, "estimated_hits": None, "estimate_status": "missing"})
-            continue
+            return status, {"source": source, "estimated_hits": None, "estimate_status": "missing"}
         try:
             if hasattr(provider, "last_search_metadata"):
                 provider.last_search_metadata = {}
             rows = provider.search(query, 1)
             metadata = dict(getattr(provider, "last_search_metadata", {}) or {})
             estimated = metadata.get("total_available")
-            source_status.append(
-                {
-                    "name": source,
-                    "status": "ok",
-                    "count": len(rows),
-                    "message": "",
-                    "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
-                    "retrieval": metadata,
-                }
-            )
-            estimates.append(
-                {
-                    "source": source,
-                    "estimated_hits": int(estimated) if estimated is not None else None,
-                    "estimate_status": "reported" if estimated is not None else "unknown",
-                }
-            )
+            status = {
+                "name": source,
+                "status": "ok",
+                "count": len(rows),
+                "message": "",
+                "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+                "retrieval": metadata,
+            }
+            estimate = {
+                "source": source,
+                "estimated_hits": int(estimated) if estimated is not None else None,
+                "estimate_status": "reported" if estimated is not None else "unknown",
+            }
+            return status, estimate
         except Exception as exc:
             status_name = getattr(exc, "status", "error")
-            source_status.append(
-                {
-                    "name": source,
-                    "status": status_name,
-                    "count": 0,
-                    "error_type": type(exc).__name__,
-                    "message": str(exc),
-                    "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
-                }
-            )
-            estimates.append({"source": source, "estimated_hits": None, "estimate_status": status_name})
+            status = {
+                "name": source,
+                "status": status_name,
+                "count": 0,
+                "error_type": type(exc).__name__,
+                "message": str(exc),
+                "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+            }
+            return status, {"source": source, "estimated_hits": None, "estimate_status": status_name}
+
+    workers = executor_workers(len(requested))
+    if workers <= 1:
+        results = [run_one(source) for source in requested]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(run_one, requested))
+    source_status = [status for status, _ in results]
+    estimates = [estimate for _, estimate in results]
     known = [item["estimated_hits"] for item in estimates if item["estimated_hits"] is not None]
     return {
         "query": query,
@@ -1178,23 +1204,19 @@ def search_query_variants_with_status(
     source_list = list(dict.fromkeys(str(source).strip() for source in sources if str(source).strip()))
     available = providers or all_providers()
     per_query_limit = max(1, math.ceil(max(1, max_records_per_source) / len(query_list)))
-    candidates: List[Candidate] = []
-    source_status: List[Dict[str, Any]] = []
-    for source in source_list:
+
+    def run_one(source: str) -> tuple[List[Candidate], Dict[str, Any]]:
         provider = available.get(source)
         if provider is None:
-            source_status.append(
-                {
-                    "name": source,
-                    "status": "missing",
-                    "count": 0,
-                    "message": "source is not configured",
-                    "elapsed_ms": 0,
-                    "pagination_complete": False,
-                    "queries": [],
-                }
-            )
-            continue
+            return [], {
+                "name": source,
+                "status": "missing",
+                "count": 0,
+                "message": "source is not configured",
+                "elapsed_ms": 0,
+                "pagination_complete": False,
+                "queries": [],
+            }
         started = time.perf_counter()
         source_rows: List[Candidate] = []
         query_reports = []
@@ -1234,18 +1256,27 @@ def search_query_variants_with_status(
         status = "ok" if successful and not failed else "partial" if successful else "error"
         if not successful and failed and len({item["status"] for item in failed}) == 1:
             status = failed[0]["status"]
-        candidates.extend(source_rows[:max_records_per_source])
-        source_status.append(
-            {
-                "name": source,
-                "status": status,
-                "count": min(len(source_rows), max_records_per_source),
-                "message": "; ".join(item["message"] for item in failed if item.get("message")),
-                "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
-                "pagination_complete": bool(successful) and not failed and all(
-                    item.get("pagination_complete") is True for item in successful
-                ),
-                "queries": query_reports,
-            }
-        )
+        return source_rows[:max_records_per_source], {
+            "name": source,
+            "status": status,
+            "count": min(len(source_rows), max_records_per_source),
+            "message": "; ".join(item["message"] for item in failed if item.get("message")),
+            "elapsed_ms": round((time.perf_counter() - started) * 1000, 3),
+            "pagination_complete": bool(successful) and not failed and all(
+                item.get("pagination_complete") is True for item in successful
+            ),
+            "queries": query_reports,
+        }
+
+    workers = executor_workers(len(source_list))
+    if workers <= 1:
+        results = [run_one(source) for source in source_list]
+    else:
+        with ThreadPoolExecutor(max_workers=workers) as pool:
+            results = list(pool.map(run_one, source_list))
+    candidates: List[Candidate] = []
+    source_status: List[Dict[str, Any]] = []
+    for rows, status in results:
+        candidates.extend(rows)
+        source_status.append(status)
     return {"candidates": candidates, "source_status": source_status, "query_variants": query_list}

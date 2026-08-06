@@ -34,6 +34,7 @@ class McpContractTests(unittest.TestCase):
                 "search_science",
                 "verify_identifiers",
                 "resolve_open_access",
+                "find_preprints",
                 "screen_candidates",
                 "explain_candidate",
                 "build_download_queue",

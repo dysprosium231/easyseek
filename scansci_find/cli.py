@@ -78,6 +78,10 @@ def build_parser() -> argparse.ArgumentParser:
     oa.add_argument("input")
     oa.add_argument("--out")
     oa.add_argument("--limit", type=int)
+    preprints = sub.add_parser("preprints", help="Find lawful preprint copies (arXiv, bioRxiv, medRxiv, SSRN) of paywalled candidates.")
+    preprints.add_argument("input")
+    preprints.add_argument("--out")
+    preprints.add_argument("--limit", type=int)
     search = sub.add_parser("search", help="Search science sources and write ScanSci Find artifacts.")
     search.add_argument("query")
     search.add_argument("--quality")
@@ -94,6 +98,7 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--citation-source", choices=["semantic", "opencitations", "both"], default="semantic")
     search.add_argument("--verify-identifiers", action="store_true", help="Verify DOI, PMID, or arXiv identifiers against authoritative metadata APIs.")
     search.add_argument("--resolve-oa", action="store_true", help="Resolve DOI open-access locations through Unpaywall.")
+    search.add_argument("--find-preprints", action="store_true", help="Find lawful preprint copies (arXiv, bioRxiv, medRxiv, SSRN) of paywalled candidates.")
     search.add_argument("--out", required=True)
     search.add_argument("--limit", type=int, default=10)
     search.add_argument("--source", action="append", dest="sources")
@@ -260,6 +265,7 @@ def run_search(args: argparse.Namespace) -> int:
         filter_report = {"kept": len(candidates), "excluded": 0, "excluded_records": []}
         verification_report = {}
         oa_report = {}
+        preprint_report = {}
     else:
         service = ScanSciFindService()
         result = service.search_academic(
@@ -282,6 +288,7 @@ def run_search(args: argparse.Namespace) -> int:
             citation_source=args.citation_source,
             verify_candidate_identifiers=args.verify_identifiers,
             resolve_oa=args.resolve_oa,
+            find_preprints=args.find_preprints,
         )
         screened = result["candidates"]
         quality = result.get("quality") or quality
@@ -298,6 +305,7 @@ def run_search(args: argparse.Namespace) -> int:
         citation_report = result.get("citation_report") or {}
         verification_report = result.get("verification_report") or {}
         oa_report = result.get("oa_report") or {}
+        preprint_report = result.get("preprint_report") or {}
     if args.fixture:
         citation_report = {}
     write_outputs(
@@ -319,6 +327,7 @@ def run_search(args: argparse.Namespace) -> int:
         citation_report=citation_report,
         verification_report=verification_report,
         oa_report=oa_report,
+        preprint_report=preprint_report,
     )
     print(json.dumps({"out": str(Path(args.out)), "total": len(screened)}, ensure_ascii=False))
     return 0
@@ -366,13 +375,15 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
         _emit_payload(payload, args.out)
         return 0
-    if args.command in {"verify", "resolve-oa"}:
+    if args.command in {"verify", "resolve-oa", "preprints"}:
         candidates = _load_candidates(Path(args.input))
         service = ScanSciFindService()
         if args.command == "verify":
             payload = service.verify_identifiers(candidates, limit=args.limit)
-        else:
+        elif args.command == "resolve-oa":
             payload = service.resolve_open_access(candidates, limit=args.limit)
+        else:
+            payload = service.find_preprints(candidates, limit=args.limit)
         _emit_payload(payload, args.out)
         return 0
     if args.command == "search":

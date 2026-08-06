@@ -66,13 +66,13 @@ Run a general academic search:
 scansci-find search "urban ecology pollinator diversity" --domain general --depth standard --out runs/urban-ecology
 ```
 
-Run citation chasing, identifier verification, and OA resolution explicitly when needed:
+Run citation chasing, identifier verification, OA resolution, and preprint matching explicitly when needed:
 
 ```powershell
-scansci-find search "urban ecology pollinator diversity" --domain general --depth systematic --expand-citations --citation-source both --verify-identifiers --resolve-oa --out runs/urban-ecology-systematic
+scansci-find search "urban ecology pollinator diversity" --domain general --depth systematic --expand-citations --citation-source both --verify-identifiers --resolve-oa --find-preprints --out runs/urban-ecology-systematic
 ```
 
-`--resolve-oa` requires `UNPAYWALL_EMAIL` or `SCANSCI_FIND_CONTACT_EMAIL`. Identifier and OA support can also be run on an existing candidate file with `scansci-find verify` and `scansci-find resolve-oa`.
+`--resolve-oa` requires `UNPAYWALL_EMAIL` or `SCANSCI_FIND_CONTACT_EMAIL`. Identifier, OA, and preprint support can also be run on an existing candidate file with `scansci-find verify`, `scansci-find resolve-oa`, and `scansci-find preprints`. Preprint matching searches arXiv and the Europe PMC Preprint Citation Index (bioRxiv, medRxiv, SSRN, Research Square) using conservative title-plus-author-or-year matching, and only enriches paywalled candidates — it never modifies a candidate's DOI or arXiv identity.
 
 Use medicine only when requested:
 
@@ -154,8 +154,11 @@ v0.3 adds:
 
 - `citation_rounds.json` with the selected citation source, novelty, saturation, and partial failures
 - `identifier_verification.json` for DOI/PMID/arXiv resolution and metadata mismatch status
-- `oa_report.json` for Unpaywall OA locations and licenses
+- `oa_report.json` for Unpaywall OA locations and licenses (including which resolvers contributed OA links)
+- `preprint_report.json` for matched preprint copies of paywalled candidates (arXiv / Europe PMC PPR)
 - optional `estimate_report.json`, `smoke_report.json`, and `calibration_report.json` for staged workflows
+
+`download_queue.json` entries may carry `preprint_identifiers` (arXiv IDs of matched open versions) that ScanSci PDF can download directly.
 
 `coverage_report` explicitly records omitted sources, incomplete pagination, missing gold sets, and incomplete citation closure. A `systematic` request remains `bounded_search` until those conditions are satisfied.
 
@@ -175,6 +178,7 @@ New workflows should use:
 - `expand_citations`
 - `verify_identifiers`
 - `resolve_open_access`
+- `find_preprints`
 
 The v0.1 tools remain available for compatibility:
 
@@ -191,6 +195,8 @@ The v0.1 tools remain available for compatibility:
 Copy `.env.example` values into your own environment or ignored local configuration. Never commit API keys, institutional credentials, cookies, or browser profiles.
 
 OpenAlex changed its API policy on 2026-02-13 and now requires a free key on every request. Set `OPENALEX_API_KEY`; otherwise that source is reported as `blocked_configuration` while the remaining sources continue. `SEMANTIC_SCHOLAR_API_KEY`, `OPENCITATIONS_ACCESS_TOKEN`, and `NCBI_API_KEY` are optional but improve isolation from shared rate limits. Unpaywall requires `UNPAYWALL_EMAIL` or the shared `SCANSCI_FIND_CONTACT_EMAIL`. Contact variables are used for responsible API identification, and transient 429/5xx responses use bounded exponential backoff.
+
+Source loops, identifier verification, and per-DOI OA resolution run in parallel by default (up to 8 workers). Set `SCANSCI_FIND_SEARCH_WORKERS` (source loops and verification) or `SCANSCI_FIND_OA_WORKERS` (Unpaywall lookups) to `1` for strictly serial behavior. Citation expansion remains serial because the OpenCitations rate limiter holds per-instance state.
 
 CNKI remains compatible with the previous variable:
 

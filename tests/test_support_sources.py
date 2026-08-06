@@ -7,6 +7,11 @@ from scansci_find.adapters import ProviderConfigurationError
 from scansci_find.support_sources import UnpaywallProvider, resolve_open_access
 
 
+class NoopResolver:
+    def resolve_doi(self, doi):
+        raise AssertionError("Unpaywall should not be called for an already-OA candidate")
+
+
 class SupportSourceTests(unittest.TestCase):
     def test_unpaywall_requires_responsible_contact_email(self):
         with patch.dict(os.environ, {"UNPAYWALL_EMAIL": "", "SCANSCI_FIND_CONTACT_EMAIL": ""}):
@@ -62,6 +67,84 @@ class SupportSourceTests(unittest.TestCase):
         self.assertEqual(candidate["links"]["pdf"], "https://existing.example/paper.pdf")
         self.assertEqual(candidate["access"]["fulltext_hint"], "oa")
         self.assertEqual(result["oa_found"], 1)
+
+    def test_candidate_with_existing_oa_link_skips_unpaywall(self):
+        class Resolver:
+            def __init__(self):
+                self.calls = []
+
+            def resolve_doi(self, doi):
+                self.calls.append(doi)
+                raise AssertionError("Unpaywall should not be called for an already-OA candidate")
+
+        resolver = Resolver()
+        result = resolve_open_access(
+            [
+                {
+                    "title": "Paper",
+                    "doi": "10.1000/test",
+                    "source_hits": ["OpenAlex"],
+                    "links": {"pdf": "https://api.openalex.org/oa.pdf"},
+                }
+            ],
+            provider=resolver,
+        )
+
+        candidate = result["candidates"][0]
+        self.assertEqual(resolver.calls, [])
+        self.assertTrue(candidate["oa_resolution"]["is_oa"])
+        self.assertEqual(candidate["oa_resolution"]["source"], "openalex")
+        self.assertEqual(candidate["access"]["fulltext_hint"], "oa")
+        self.assertEqual(result["oa_found"], 1)
+        self.assertEqual(result["resolvers_used"], {"openalex": 1})
+
+    def test_europe_pmc_fulltext_link_is_attributed_to_europepmc(self):
+        result = resolve_open_access(
+            [
+                {
+                    "title": "Paper",
+                    "doi": "10.1000/test",
+                    "source_hits": ["Europe PMC"],
+                    "links": {"fulltext": "https://europepmc.org/articles/PMC1234567"},
+                }
+            ],
+            provider=NoopResolver(),
+        )
+
+        self.assertEqual(result["resolvers_used"], {"europepmc": 1})
+        self.assertTrue(result["candidates"][0]["oa_resolution"]["is_oa"])
+
+    def test_unresolved_candidates_still_call_unpaywall_and_are_counted(self):
+        class Resolver:
+            def __init__(self):
+                self.calls = []
+
+            def resolve_doi(self, doi):
+                self.calls.append(doi)
+                return {
+                    "status": "resolved",
+                    "source": "Unpaywall",
+                    "doi": doi,
+                    "is_oa": False,
+                    "oa_status": "closed",
+                    "pdf_url": "",
+                    "landing_page_url": "",
+                    "license": "",
+                }
+
+        resolver = Resolver()
+        result = resolve_open_access(
+            [
+                {"title": "A", "doi": "10.1000/a", "links": {}},
+                {"title": "B", "doi": "10.1000/b", "links": {}},
+            ],
+            provider=resolver,
+        )
+
+        self.assertEqual(resolver.calls, ["10.1000/a", "10.1000/b"])
+        self.assertEqual(result["resolvers_used"], {"unpaywall": 2})
+        self.assertEqual(result["status_counts"], {"resolved": 2})
+        self.assertEqual(result["oa_found"], 0)
 
 
 if __name__ == "__main__":

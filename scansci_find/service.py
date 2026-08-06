@@ -18,6 +18,7 @@ from scansci_find.dedupe import dedupe_candidates, dedupe_with_clusters
 from scansci_find.evidence import attach_evidence_dimensions
 from scansci_find.journal_scout import JournalScoutMcpGateway
 from scansci_find.outputs import build_download_queue, enrich_download_metadata
+from scansci_find.preprint import PreprintFinder, find_preprints as find_preprints_batch
 from scansci_find.protocol import build_protocol
 from scansci_find.quality import apply_quality
 from scansci_find.source_registry import DEPTH_PROFILES, SUPPORT_SOURCE_ROUTES, list_domains, list_sources as registry_sources
@@ -69,11 +70,13 @@ class ScanSciFindService:
         providers: Optional[Dict[str, Any]] = None,
         identifier_verifier: Optional[Any] = None,
         oa_resolver: Optional[Any] = None,
+        preprint_finder: Optional[Any] = None,
     ) -> None:
         self.journal_gateway = journal_gateway or JournalScoutMcpGateway()
         self.providers = providers
         self.identifier_verifier = identifier_verifier
         self.oa_resolver = oa_resolver
+        self.preprint_finder = preprint_finder
 
     def health_check(self) -> Dict[str, Any]:
         journal = self.journal_gateway.health_check()
@@ -291,6 +294,7 @@ class ScanSciFindService:
         citation_source: str = "semantic",
         verify_candidate_identifiers: bool = False,
         resolve_oa: bool = False,
+        find_preprints: bool = False,
     ) -> Dict[str, Any]:
         protocol = build_protocol(
             query,
@@ -377,6 +381,14 @@ class ScanSciFindService:
             oa_result = resolve_oa_batch(screened, provider=self.oa_resolver or UnpaywallProvider())
             screened = oa_result.pop("candidates")
             result["candidates"] = screened
+
+        preprint_result: Dict[str, Any] = {"checked": 0, "unchecked": len(screened), "matched": 0, "status_counts": {}}
+        if find_preprints and profile == "paper" and screened:
+            preprint_result = find_preprints_batch(screened, finder=self.preprint_finder or PreprintFinder())
+            screened = preprint_result.pop("candidates")
+            result["candidates"] = screened
+            # Rebuild download entries so the queue carries preprint identifiers.
+            enrich_download_metadata(screened)
         attach_evidence_dimensions(screened)
 
         human_queue = build_human_queue(screened)
@@ -416,6 +428,7 @@ class ScanSciFindService:
                 "citation_report": citation_result,
                 "verification_report": verification_result,
                 "oa_report": oa_result,
+                "preprint_report": preprint_result,
                 "raw_total": audited_raw_count,
                 "deduplicated_total": audited_deduplicated_count,
             }
@@ -478,6 +491,16 @@ class ScanSciFindService:
             provider=self.oa_resolver or UnpaywallProvider(),
             limit=limit,
         )
+        attach_evidence_dimensions(result["candidates"])
+        return result
+
+    def find_preprints(self, candidates: List[Dict[str, Any]], limit: Optional[int] = None) -> Dict[str, Any]:
+        result = find_preprints_batch(
+            candidates,
+            finder=self.preprint_finder or PreprintFinder(),
+            limit=limit,
+        )
+        enrich_download_metadata(result["candidates"])
         attach_evidence_dimensions(result["candidates"])
         return result
 

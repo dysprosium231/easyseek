@@ -131,6 +131,7 @@ def list_tools() -> List[Dict[str, Any]]:
                     "citation_source": {"type": "string", "enum": ["semantic", "opencitations", "both"], "default": "semantic"},
                     "verify_candidate_identifiers": {"type": "boolean", "default": False},
                     "resolve_oa": {"type": "boolean", "default": False},
+                    "find_preprints": {"type": "boolean", "default": False},
                 },
                 ["query"],
             ),
@@ -168,6 +169,18 @@ def list_tools() -> List[Dict[str, Any]]:
         {
             "name": "resolve_open_access",
             "description": "Resolve DOI open-access locations and licenses through Unpaywall without replacing existing PDF links.",
+            "inputSchema": _schema(
+                {
+                    "candidates": {"type": "array", "items": candidate_schema},
+                    "limit": {"type": "integer", "minimum": 0},
+                },
+                ["candidates"],
+            ),
+            "outputSchema": _schema(),
+        },
+        {
+            "name": "find_preprints",
+            "description": "Find lawful preprint copies (arXiv, bioRxiv, medRxiv, SSRN via Europe PMC) of paywalled papers by conservative title and author matching.",
             "inputSchema": _schema(
                 {
                     "candidates": {"type": "array", "items": candidate_schema},
@@ -323,6 +336,7 @@ def handle_tool_call(name: str, arguments: Dict[str, Any], service: Any) -> Dict
                 citation_source=arguments.get("citation_source") or "semantic",
                 verify_candidate_identifiers=bool(arguments.get("verify_candidate_identifiers", False)),
                 resolve_oa=bool(arguments.get("resolve_oa", False)),
+                find_preprints=bool(arguments.get("find_preprints", False)),
             )
         elif name == "search_science":
             payload = service.search_science(
@@ -341,6 +355,11 @@ def handle_tool_call(name: str, arguments: Dict[str, Any], service: Any) -> Dict
             )
         elif name == "resolve_open_access":
             payload = service.resolve_open_access(
+                arguments.get("candidates") or [],
+                limit=arguments.get("limit"),
+            )
+        elif name == "find_preprints":
+            payload = service.find_preprints(
                 arguments.get("candidates") or [],
                 limit=arguments.get("limit"),
             )
