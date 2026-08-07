@@ -49,6 +49,7 @@ class BrowserRuntimeResolver:
         path_exists: Optional[Callable[[str], bool]] = None,
         default_system_browser_paths: Optional[Iterable[str]] = None,
         scansci_pdf_roots: Optional[Iterable[str]] = None,
+        cdp_discover: Optional[Callable[[], Optional[Dict[str, Any]]]] = None,
     ) -> None:
         self.env = dict(os.environ if env is None else env)
         self.path_lookup = path_lookup or shutil.which
@@ -60,6 +61,21 @@ class BrowserRuntimeResolver:
         self.scansci_pdf_roots = list(
             _default_scansci_pdf_roots(self.env) if scansci_pdf_roots is None else scansci_pdf_roots
         )
+        # The CDP probe is intentionally not run during construction: the
+        # resolver stays pure for tests, and the module-level doctor() injects
+        # the real probe.
+        self.cdp_discover = cdp_discover
+
+    @staticmethod
+    def _default_cdp_discover() -> Optional[Dict[str, Any]]:
+        try:
+            from scansci_find.cdp import cdp_available, discover_chrome
+
+            if not cdp_available():
+                return None
+            return discover_chrome()
+        except Exception:
+            return None
 
     def doctor(self) -> Dict[str, Any]:
         candidates = self._candidates()
@@ -111,6 +127,17 @@ class BrowserRuntimeResolver:
             }
         )
         candidates.append(self._scan_scansci_pdf())
+        if self.cdp_discover is not None:
+            cdp_browser = self.cdp_discover()
+            candidates.append(
+                {
+                    "selected": "cdp_chrome",
+                    "source": "cdp_remote_debugging",
+                    "available": bool(cdp_browser),
+                    "port": cdp_browser.get("port") if cdp_browser else None,
+                    "ws_url": cdp_browser.get("ws_url") if cdp_browser else "",
+                }
+            )
         for package in ("cloakbrowser", "playwright"):
             candidates.append(
                 {
@@ -167,7 +194,7 @@ class BrowserRuntimeResolver:
 
 
 def doctor() -> Dict[str, Any]:
-    return BrowserRuntimeResolver().doctor()
+    return BrowserRuntimeResolver(cdp_discover=BrowserRuntimeResolver._default_cdp_discover).doctor()
 
 
 def main(argv: Optional[List[str]] = None) -> int:

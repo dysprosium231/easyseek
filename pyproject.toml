@@ -4,13 +4,16 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "scansci-find"
-version = "0.3.0"
+version = "0.4.0"
 description = "Domain-neutral, auditable multi-source academic discovery for ScanSci."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "ScanSci contributors" }]
 license = { text = "MIT" }
 dependencies = []
+
+[project.optional-dependencies]
+cdp = ["websocket-client>=1.7"]
 
 [project.scripts]
 scansci-find = "scansci_find.cli:main"

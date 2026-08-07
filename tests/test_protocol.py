@@ -26,11 +26,14 @@ class ProtocolTests(unittest.TestCase):
     def test_systematic_plan_names_conditional_sources_instead_of_claiming_they_ran(self):
         routed = route_sources("general", "systematic")
 
-        self.assertIn("google-scholar", routed["conditional"])
         self.assertIn("web-of-science", routed["conditional"])
         self.assertIn("hal", routed["conditional"])
         self.assertIn("dimensions", routed["conditional"])
         self.assertIn("openalex", routed["executable"])
+        # Google Scholar now ships a CDP implementation; it is executable at
+        # runtime only when a debuggable Chrome is available.
+        self.assertIn("google-scholar", routed["executable"])
+        self.assertEqual(get_source("google-scholar").implementation, "cdp")
 
     def test_concept_blocks_compile_boolean_and_plain_query_variants(self):
         protocol = build_protocol(

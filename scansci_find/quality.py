@@ -1,6 +1,10 @@
 from __future__ import annotations
 
-from typing import Any, Dict, Iterable, List, Optional
+from datetime import date
+from typing import Any, Callable, Dict, Iterable, List, Optional
+
+VALID_SORTS = ("relevance", "recency", "citations")
+RECENT_WINDOW_DAYS = 183
 
 
 def _number_or_none(value: Any) -> Optional[float]:
@@ -10,6 +14,62 @@ def _number_or_none(value: Any) -> Optional[float]:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _recent_days(candidate: Dict[str, Any]) -> Optional[int]:
+    """Days since publication (None when the date cannot be determined).
+
+    Uses ``published_date`` (YYYY-MM-DD) when present, otherwise approximates
+    from ``year`` so recency sorting still works for coarse records.
+    """
+    published_date = str(candidate.get("published_date") or "").strip()
+    if len(published_date) >= 10:
+        try:
+            published = date.fromisoformat(published_date[:10])
+            return max(0, (date.today() - published).days)
+        except ValueError:
+            pass
+    year = candidate.get("year")
+    if year:
+        try:
+            return max(0, (date.today() - date(int(year), 7, 1)).days)
+        except (TypeError, ValueError):
+            pass
+    return None
+
+
+def mark_recent(candidate: Dict[str, Any], recent_days: Optional[int] = None) -> Dict[str, Any]:
+    """Attach the recency annotation used by the recency sort and summaries."""
+    days = _recent_days(candidate) if recent_days is None else recent_days
+    candidate["recency"] = {
+        "is_recent": days is not None and days <= RECENT_WINDOW_DAYS,
+        "days_since_publication": days,
+    }
+    return candidate
+
+
+def _sort_key(mode: str) -> Callable[[Dict[str, Any]], tuple]:
+    if mode == "recency":
+        def key(item: Dict[str, Any]) -> tuple:
+            recency = item.get("recency") or {}
+            return (
+                not bool(recency.get("is_recent")),
+                -int(item.get("citation_count") or 0),
+                -float(item.get("relevance_score") or 0.0),
+                str(item.get("title") or ""),
+            )
+
+        return key
+    if mode == "citations":
+        def key(item: Dict[str, Any]) -> tuple:
+            return (
+                -int(item.get("citation_count") or 0),
+                -float(item.get("relevance_score") or 0.0),
+                str(item.get("title") or ""),
+            )
+
+        return key
+    return lambda item: (-float(item.get("relevance_score") or 0.0), str(item.get("title") or ""))
 
 
 def map_jif(journal: Optional[Dict[str, Any]]) -> Dict[str, Any]:
@@ -74,8 +134,12 @@ def apply_quality(
     policy: str = "high_quality_broad",
     mode: str = "boost",
     filters: Optional[Dict[str, Any]] = None,
+    sort: str = "relevance",
 ) -> List[Dict[str, Any]]:
     mode = (mode or "boost").casefold()
+    sort = (sort or "relevance").casefold()
+    if sort not in VALID_SORTS:
+        raise ValueError(f"unknown sort mode: {sort}")
     candidate_rows = [dict(item) for item in candidates]
     if not candidate_rows:
         return []
@@ -110,5 +174,7 @@ def apply_quality(
             candidate["relevance_score"] = round(float(candidate.get("relevance_score") or 0.0) + 0.25, 6)
         if mode == "hard" and not passed:
             continue
+        if sort == "recency":
+            mark_recent(candidate)
         out.append(candidate)
-    return sorted(out, key=lambda item: (-float(item.get("relevance_score") or 0.0), str(item.get("title") or "")))
+    return sorted(out, key=_sort_key(sort))

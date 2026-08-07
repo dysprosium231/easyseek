@@ -18,7 +18,7 @@ class SourceSpec:
 
     @property
     def executable(self) -> bool:
-        return self.implementation in {"native", "external_mcp"} and "search" in self.capabilities
+        return self.implementation in {"native", "external_mcp", "cdp"} and "search" in self.capabilities
 
     @property
     def support_executable(self) -> bool:
@@ -118,7 +118,7 @@ SOURCE_CATALOG: Dict[str, SourceSpec] = {
     "cqvip": _spec("cqvip", "CQVIP", "chinese_database", ["chinese_general", "all"], ["search", "export", "fulltext"], "institution_or_login", "contract", "domain"),
 
     # Commercial or browser-backed discovery sources.
-    "google-scholar": _spec("google-scholar", "Google Scholar", "broad_discovery_fallback", ["all"], ["search", "citations", "versions"], "browser", "contract", "supplemental"),
+    "google-scholar": _spec("google-scholar", "Google Scholar", "broad_discovery_fallback", ["all"], ["search", "citations", "versions"], "browser", "cdp", "supplemental", "CDP adapter driving the user's own Chrome (remote debugging); never bypasses CAPTCHA or login walls."),
     "web-of-science": _spec("web-of-science", "Web of Science", "curated_citation_index", ["all"], ["search", "citations", "export"], "institution", "contract", "supplemental"),
     "scopus": _spec("scopus", "Scopus", "curated_citation_index", ["all"], ["search", "citations", "export"], "institution", "contract", "supplemental"),
     "dimensions": _spec("dimensions", "Dimensions", "curated_research_index", ["all"], ["search", "citations", "grants", "datasets"], "account_or_institution", "contract", "supplemental"),

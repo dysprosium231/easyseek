@@ -3,6 +3,27 @@ from __future__ import annotations
 from typing import Any, Dict, Iterable, List
 
 
+def _access_status(candidate: Dict[str, Any], access: Dict[str, Any]) -> str:
+    """Derive the full-text status enum (open_pdf/preprint/needs_institution/
+    no_open_pdf/unknown), preferring an explicitly recorded status.
+
+    The enum is additive: the legacy ``fulltext_hint`` values remain
+    untouched, and ``availability.status`` is the normalized view that
+    download manifests and evidence tables consume.
+    """
+    explicit = str(access.get("access_status") or "").strip()
+    if explicit:
+        return explicit
+    fulltext_hint = str(access.get("fulltext_hint") or "").strip()
+    if fulltext_hint == "oa" or (candidate.get("links") or {}).get("pdf"):
+        return "open_pdf"
+    if fulltext_hint == "preprint":
+        return "preprint"
+    if fulltext_hint in ("institution_required",) or access.get("requires_institution"):
+        return "needs_institution"
+    return "unknown"
+
+
 def evidence_dimensions(candidate: Dict[str, Any]) -> Dict[str, Any]:
     identifiers = candidate.get("identifiers") or {}
     canonical_identifier = bool(
@@ -48,6 +69,7 @@ def evidence_dimensions(candidate: Dict[str, Any]) -> Dict[str, Any]:
         },
         "availability": {
             "fulltext_hint": access.get("fulltext_hint") or ("oa" if (candidate.get("links") or {}).get("pdf") else "unknown"),
+            "status": _access_status(candidate, access),
             "requires_login": bool(access.get("requires_login")),
             "requires_institution": bool(access.get("requires_institution")),
         },

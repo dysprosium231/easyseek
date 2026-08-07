@@ -79,6 +79,8 @@ def _candidate(
     eissn: str = "",
     source: str,
     relevance_score: float = 0.0,
+    citation_count: int = 0,
+    published_date: str = "",
     links: Optional[Dict[str, str]] = None,
     artifact_type: str = "paper",
     language: str = "",
@@ -129,6 +131,8 @@ def _candidate(
         "eissn": eissn.strip(),
         "source_hits": [source],
         "relevance_score": float(relevance_score or 0.0),
+        "citation_count": int(citation_count or 0),
+        "published_date": str(published_date or "").strip(),
         "quality": {},
         "download": {},
         "links": links or {},
@@ -155,6 +159,21 @@ def _year_from_date_parts(value: Any) -> Optional[int]:
         return None
 
 
+def _date_from_date_parts(value: Any) -> str:
+    """Render a Crossref date-parts value as YYYY-MM-DD (or the best partial)."""
+    try:
+        parts = [int(part) for part in value["date-parts"][0]]
+    except (KeyError, IndexError, TypeError, ValueError):
+        return ""
+    if not parts:
+        return ""
+    if len(parts) == 1:
+        return f"{parts[0]:04d}"
+    if len(parts) == 2:
+        return f"{parts[0]:04d}-{parts[1]:02d}"
+    return f"{parts[0]:04d}-{parts[1]:02d}-{parts[2]:02d}"
+
+
 def normalize_openalex_work(work: Dict[str, Any]) -> Candidate:
     source = ((work.get("primary_location") or {}).get("source") or {})
     issns = source.get("issn") or []
@@ -172,6 +191,8 @@ def normalize_openalex_work(work: Dict[str, Any]) -> Candidate:
         eissn=str(issns[1] if len(issns) > 1 else ""),
         source="OpenAlex",
         relevance_score=float(work.get("relevance_score") or 0.0),
+        citation_count=int(work.get("cited_by_count") or 0),
+        published_date=str(work.get("publication_date") or "").strip(),
         links={
             "paper": str(work.get("id") or ""),
             "pdf": str((work.get("open_access") or {}).get("oa_url") or ""),
@@ -196,6 +217,8 @@ def normalize_crossref_work(work: Dict[str, Any]) -> Candidate:
         eissn=str(issns[1] if len(issns) > 1 else ""),
         source="Crossref",
         relevance_score=float(work.get("score") or 0.0),
+        citation_count=int(work.get("is-referenced-by-count") or 0),
+        published_date=_date_from_date_parts(work.get("issued")),
         links={"paper": str(work.get("URL") or "")},
     )
 
@@ -211,6 +234,8 @@ def normalize_semantic_paper(paper: Dict[str, Any]) -> Candidate:
         journal=str((paper.get("journal") or {}).get("name") or ""),
         source="Semantic Scholar",
         relevance_score=float(paper.get("citationCount") or 0.0),
+        citation_count=int(paper.get("citationCount") or 0),
+        published_date=str(paper.get("publicationDate") or "").strip(),
         links={
             "paper": str(paper.get("url") or ""),
             "pdf": str((paper.get("openAccessPdf") or {}).get("url") or ""),
@@ -226,6 +251,7 @@ def normalize_arxiv_entry(entry: Dict[str, Any]) -> Candidate:
         arxiv_id=entry.get("arxiv_id") or entry.get("id") or "",
         source="arXiv",
         relevance_score=float(entry.get("relevance_score") or 0.0),
+        published_date=str(entry.get("published_date") or "").strip(),
         links={"paper": str(entry.get("url") or ""), "pdf": str(entry.get("pdf_url") or "")},
     )
 
@@ -289,6 +315,8 @@ def normalize_europe_pmc_record(record: Dict[str, Any]) -> Candidate:
         abstract=str(record.get("abstractText") or ""),
         source="Europe PMC",
         relevance_score=float(record.get("citedByCount") or 0.0),
+        citation_count=int(record.get("citedByCount") or 0),
+        published_date=str(record.get("firstPublicationDate") or "").strip(),
         links={
             "paper": f"https://europepmc.org/article/{record.get('source') or 'MED'}/{pmid or pmcid}" if (pmid or pmcid) else "",
             "fulltext": f"https://europepmc.org/articles/{pmcid}" if pmcid else "",
@@ -643,7 +671,7 @@ class SemanticScholarProvider(HttpProvider):
     name = "semantic"
 
     def search(self, query: str, limit: int) -> List[Candidate]:
-        fields = "title,year,authors,externalIds,journal,openAccessPdf,url,citationCount"
+        fields = "title,year,authors,externalIds,journal,openAccessPdf,url,citationCount,publicationDate"
         requested = max(1, int(limit))
         api_key = str(os.environ.get("SEMANTIC_SCHOLAR_API_KEY") or "").strip()
         rows: List[Dict[str, Any]] = []
@@ -699,6 +727,7 @@ class ArxivProvider(HttpProvider):
                         "arxiv_id": entry_id,
                         "url": entry_id,
                         "pdf_url": pdf_url,
+                        "published_date": published[:10],
                     }
                 )
             )
@@ -958,7 +987,7 @@ class CNKIMcpProvider(HttpProvider):
                 "params": {
                     "protocolVersion": "2025-06-18",
                     "capabilities": {},
-                    "clientInfo": {"name": "scansci-find", "version": "0.3.0"},
+                    "clientInfo": {"name": "scansci-find", "version": "0.4.0"},
                 },
             }
             tool_call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": name, "arguments": arguments}}
@@ -1034,10 +1063,21 @@ def research_data_providers() -> Dict[str, HttpProvider]:
 
 def chinese_providers() -> Dict[str, HttpProvider]:
     baidu = BaiduScholarProvider()
+    cnki = CNKIMcpProvider()
+    # CDP fallback: when no authorized MCP command is configured, drive the
+    # user's own Chrome against CNKI KNS8. Without a debuggable Chrome the
+    # provider degrades to a blocked_configuration with both remedies named.
+    if not (cnki.command or _command_from_env("SCANSCI_FIND_CNKI_MCP_COMMAND")):
+        try:
+            from scansci_find.browser_sources import CNKICdpProvider
+
+            cnki = CNKICdpProvider()
+        except ImportError:
+            pass
     return {
         "baidu-scholar": baidu,
         "baidu_scholar": baidu,
-        "cnki": CNKIMcpProvider(),
+        "cnki": cnki,
         "wanfang": UnavailableChineseProvider("wanfang", "Wanfang adapter is contract-only; use an authorized browser adapter when available"),
         "cqvip": UnavailableChineseProvider("cqvip", "CQVIP adapter is contract-only; use an authorized browser adapter when available"),
     }
@@ -1048,6 +1088,12 @@ def all_providers() -> Dict[str, HttpProvider]:
     providers.update(domain_providers())
     providers.update(research_data_providers())
     providers.update(chinese_providers())
+    try:
+        from scansci_find.browser_sources import GoogleScholarCdpProvider
+
+        providers["google-scholar"] = GoogleScholarCdpProvider()
+    except ImportError:
+        pass
     return providers
 
 

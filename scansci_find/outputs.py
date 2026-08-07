@@ -82,6 +82,45 @@ def build_data_queue(candidates: Iterable[Dict[str, Any]]) -> List[Dict[str, Any
     return queue
 
 
+def build_oa_manifest(candidates: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+    """Build the open-access download manifest consumed by the retrieval layer.
+
+    Records with an open full text (``open_pdf``/``preprint``) and a PDF URL
+    are ``eligible`` for direct download; everything else is labeled with its
+    status so the retrieval layer can route it (institutional phase, or skip).
+    """
+    entries = []
+    for candidate in candidates:
+        identifier = candidate.get("doi") or candidate.get("arxiv_id") or ""
+        if not identifier:
+            continue
+        access = candidate.get("access") or {}
+        status = str(access.get("access_status") or "unknown")
+        pdf_url = str((candidate.get("links") or {}).get("pdf") or "")
+        if status in ("open_pdf", "preprint") and pdf_url:
+            download_status = "eligible"
+            reason = ""
+        else:
+            download_status = "skipped"
+            reason = f"fulltext_status={status}"
+        entries.append(
+            {
+                "identifier": identifier,
+                "identifier_type": "doi" if candidate.get("doi") else "arxiv",
+                "title": candidate.get("title") or "",
+                "fulltext_status": status,
+                "pdf_url": pdf_url,
+                "download_status": download_status,
+                "reason": reason,
+            }
+        )
+    return {
+        "entries": entries,
+        "total": len(entries),
+        "eligible": sum(1 for entry in entries if entry["download_status"] == "eligible"),
+    }
+
+
 def render_papers_md(candidates: Iterable[Dict[str, Any]], query: str) -> str:
     lines = [f"# ScanSci Find Results", "", f"Query: {query}", ""]
     for idx, candidate in enumerate(candidates, 1):
@@ -100,6 +139,7 @@ def render_papers_md(candidates: Iterable[Dict[str, Any]], query: str) -> str:
                 f"- DOI: {candidate.get('doi') or '-'}",
                 f"- arXiv: {candidate.get('arxiv_id') or '-'}",
                 f"- Preprint: {(candidate.get('links') or {}).get('preprint') or '-'}",
+                f"- Code: {(candidate.get('code') or {}).get('url') or '-'}",
                 f"- Sources: {', '.join(candidate.get('source_hits') or [])}",
                 f"- Evidence: {evidence or '-'}",
                 "",
@@ -258,6 +298,7 @@ def write_outputs(
     verification_report: Optional[Dict[str, Any]] = None,
     oa_report: Optional[Dict[str, Any]] = None,
     preprint_report: Optional[Dict[str, Any]] = None,
+    code_report: Optional[Dict[str, Any]] = None,
     estimate_report: Optional[Dict[str, Any]] = None,
     smoke_report: Optional[Dict[str, Any]] = None,
     calibration_report: Optional[Dict[str, Any]] = None,
@@ -306,6 +347,7 @@ def write_outputs(
         encoding="utf-8",
     )
     (out_dir / "download_queue.json").write_text(json.dumps(build_download_queue(candidates), ensure_ascii=False, indent=2), encoding="utf-8")
+    (out_dir / "oa_manifest.json").write_text(json.dumps(build_oa_manifest(candidates), ensure_ascii=False, indent=2), encoding="utf-8")
     data_queue = build_data_queue(candidates)
     if data_queue:
         (out_dir / "data_queue.json").write_text(json.dumps(data_queue, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -323,13 +365,23 @@ def write_outputs(
     (out_dir / "coverage_report.json").write_text(json.dumps(audit, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "coverage_report.md").write_text(render_coverage_markdown(audit), encoding="utf-8")
     (out_dir / "prisma.json").write_text(json.dumps(prisma, ensure_ascii=False, indent=2), encoding="utf-8")
-    (out_dir / "PRISMA.md").write_text(render_prisma_markdown(prisma), encoding="utf-8")
+    if prisma.get("consistent", True):
+        (out_dir / "PRISMA.md").write_text(render_prisma_markdown(prisma), encoding="utf-8")
+    else:
+        # Refuse to render an inconsistent PRISMA diagram; record why instead.
+        (out_dir / "prisma_inconsistency.md").write_text(
+            "# PRISMA counts are inconsistent — diagram not rendered\n\n"
+            + "\n".join(f"- {reason}" for reason in prisma.get("consistency_reasons") or [])
+            + "\n",
+            encoding="utf-8",
+        )
     (out_dir / "dedupe_clusters.json").write_text(json.dumps(dedupe_clusters or [], ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "filter_report.json").write_text(json.dumps(filter_report or {}, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "citation_rounds.json").write_text(json.dumps(citation_report or {}, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "identifier_verification.json").write_text(json.dumps(verification_report or {}, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "oa_report.json").write_text(json.dumps(oa_report or {}, ensure_ascii=False, indent=2), encoding="utf-8")
     (out_dir / "preprint_report.json").write_text(json.dumps(preprint_report or {}, ensure_ascii=False, indent=2), encoding="utf-8")
+    (out_dir / "code_report.json").write_text(json.dumps(code_report or {}, ensure_ascii=False, indent=2), encoding="utf-8")
     if estimate_report is not None:
         (out_dir / "estimate_report.json").write_text(json.dumps(estimate_report, ensure_ascii=False, indent=2), encoding="utf-8")
     if smoke_report is not None:
@@ -344,7 +396,7 @@ def write_outputs(
     artifacts = sorted({path.name for path in out_dir.iterdir() if path.is_file()} | {"run_manifest.json"})
     manifest = {
         "service": "scansci-find",
-        "version": "0.3.0",
+        "version": "0.4.0",
         "protocol_id": protocol.get("protocol_id") or "",
         "query": query,
         "profile": profile,

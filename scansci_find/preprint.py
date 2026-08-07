@@ -127,6 +127,7 @@ def _apply_preprint(candidate: Dict[str, Any], matched: List[Dict[str, Any]]) ->
     access = dict(candidate.get("access") or {})
     if str(access.get("fulltext_hint") or "unknown") not in ("oa", "preprint"):
         access["fulltext_hint"] = "preprint"
+    access["access_status"] = "preprint"
     candidate["access"] = access
     candidate["preprint_versions"] = matched
 

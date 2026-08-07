@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Iterable, List, Optional
 
 from scansci_find.source_registry import DEPTH_PROFILES, DOMAIN_PROFILES, SUPPORT_SOURCE_ROUTES, route_sources
+from scansci_find.vocab import expand_terms
 
 
 PROTOCOL_VERSION = "1.0"
@@ -48,6 +49,7 @@ class SearchProtocol:
     citation_rounds: int
     saturation_threshold: float
     generated_at: str
+    saturation_consecutive_rounds: int = 2
     version: str = PROTOCOL_VERSION
 
     def to_dict(self) -> Dict[str, Any]:
@@ -78,11 +80,11 @@ def _protocol_id(payload: Dict[str, Any]) -> str:
     return "sp-" + hashlib.sha256(stable.encode("utf-8")).hexdigest()[:12]
 
 
-def _compile_queries(query: str, blocks: List[ConceptBlock]) -> tuple[str, List[str]]:
+def _compile_queries(query: str, blocks: List[ConceptBlock], domain: str = "general") -> tuple[str, List[str]]:
     parts = []
     term_sets = []
     for block in blocks:
-        terms = _clean_strings(block.terms)
+        terms = expand_terms(_clean_strings(block.terms), domain=domain)
         if not terms:
             continue
         quoted = [f'"{term}"' if " " in term else term for term in terms]
@@ -115,6 +117,7 @@ def build_protocol(
     sources: Optional[Iterable[str]] = None,
     citation_rounds: Optional[int] = None,
     saturation_threshold: float = 0.01,
+    saturation_consecutive_rounds: int = 2,
 ) -> SearchProtocol:
     query = str(query or "").strip()
     if not query:
@@ -129,6 +132,8 @@ def build_protocol(
         raise ValueError("year_from must be less than or equal to year_to")
     if not 0 <= float(saturation_threshold) <= 1:
         raise ValueError("saturation_threshold must be between 0 and 1")
+    if int(saturation_consecutive_rounds) < 1:
+        raise ValueError("saturation_consecutive_rounds must be at least 1")
 
     profile = DOMAIN_PROFILES[domain_key]
     depth_profile = DEPTH_PROFILES[depth_key]
@@ -138,7 +143,7 @@ def build_protocol(
         raise ValueError("citation_rounds must be non-negative")
 
     blocks = _concept_blocks(query, concept_blocks)
-    boolean_query, query_variants = _compile_queries(query, blocks)
+    boolean_query, query_variants = _compile_queries(query, blocks, domain=domain_key)
     cleaned_inclusion = _clean_strings(inclusion_criteria)
     cleaned_exclusion = _clean_strings(exclusion_criteria)
     cleaned_languages = _clean_strings(languages)
@@ -160,6 +165,7 @@ def build_protocol(
         "gold_set": normalized_gold_set,
         "citation_rounds": rounds,
         "saturation_threshold": float(saturation_threshold),
+        "saturation_consecutive_rounds": int(saturation_consecutive_rounds),
     }
     return SearchProtocol(
         protocol_id=_protocol_id(stable_payload),
@@ -187,5 +193,6 @@ def build_protocol(
         max_records_per_source=int(depth_profile["max_records_per_source"]),
         citation_rounds=rounds,
         saturation_threshold=float(saturation_threshold),
+        saturation_consecutive_rounds=int(saturation_consecutive_rounds),
         generated_at=datetime.now(timezone.utc).isoformat(),
     )

@@ -6,6 +6,7 @@ from collections import Counter
 from typing import Any, Dict, Iterable, List, Optional
 
 from scansci_find.adapters import normalize_arxiv_id, normalize_doi
+from scansci_find.measure import estimate_population
 
 
 def _title_key(value: Any) -> str:
@@ -31,19 +32,39 @@ def _candidate_identifiers(candidate: Dict[str, Any]) -> set[str]:
     return values
 
 
-def gold_set_report(gold_set: Iterable[Dict[str, str]], candidates: Iterable[Dict[str, Any]]) -> Dict[str, Any]:
+def gold_set_report(
+    gold_set: Iterable[Dict[str, str]],
+    candidates: Iterable[Dict[str, Any]],
+    *,
+    year_from: Optional[int] = None,
+    year_to: Optional[int] = None,
+) -> Dict[str, Any]:
     candidate_ids = set().union(*(_candidate_identifiers(item) for item in candidates)) if candidates else set()
     rows = []
+    buckets: Counter[str] = Counter()
     for gold in gold_set:
         probes = _candidate_identifiers(gold)
         found = bool(probes & candidate_ids)
-        rows.append({"gold": dict(gold), "found": found, "matched_keys": sorted(probes & candidate_ids)})
+        if found:
+            matched = next((item for item in candidates if probes & _candidate_identifiers(item)), None)
+            year = matched.get("year") if matched else None
+            if year is None:
+                bucket = "found_undated"
+            elif (year_from is not None and int(year) < int(year_from)) or (year_to is not None and int(year) > int(year_to)):
+                bucket = "found_out_of_window"
+            else:
+                bucket = "found_in_window"
+        else:
+            bucket = "missing"
+        buckets[bucket] += 1
+        rows.append({"gold": dict(gold), "found": found, "bucket": bucket, "matched_keys": sorted(probes & candidate_ids)})
     total = len(rows)
-    found_count = sum(1 for row in rows if row["found"])
+    found_count = buckets["found_in_window"] + buckets["found_out_of_window"] + buckets["found_undated"]
     return {
         "total": total,
         "found": found_count,
         "recall": (found_count / total) if total else None,
+        "buckets": dict(sorted(buckets.items())),
         "items": rows,
     }
 
@@ -79,14 +100,27 @@ def prisma_counts(
     explicit_excluded = sum(1 for item in rows if (item.get("screening") or {}).get("decision") == "exclude")
     explicit_included = sum(1 for item in rows if (item.get("screening") or {}).get("decision") == "include")
     unscreened = max(0, len(rows) - explicit_excluded - explicit_included)
+    raw = max(0, int(raw_count))
+    deduplicated = max(0, int(deduplicated_count))
+    reasons = []
+    if deduplicated > raw:
+        reasons.append("deduplicated_exceeds_identified")
+    if len(rows) > deduplicated:
+        reasons.append("retained_exceeds_deduplicated")
+    if explicit_excluded + explicit_included > len(rows):
+        reasons.append("screening_decisions_exceed_candidates")
     return {
-        "identified": max(0, int(raw_count)),
-        "duplicates_removed": max(0, int(raw_count) - int(deduplicated_count)),
-        "screened": max(0, int(deduplicated_count)),
+        "identified": raw,
+        "duplicates_removed": max(0, raw - deduplicated),
+        "screened": deduplicated,
         "excluded": explicit_excluded,
         "included": explicit_included,
         "awaiting_screening": unscreened,
         "human_queue": max(0, int(human_queue_count)),
+        #: Inconsistency gate: when false, PRISMA.md is not rendered so a
+        #: broken pipeline cannot masquerade as a completed one.
+        "consistent": not reasons,
+        "consistency_reasons": reasons,
     }
 
 
@@ -168,7 +202,13 @@ def coverage_report(
         "source_status": statuses,
         "unconsulted_sources": unconsulted,
         "record_counts": {"raw": int(raw_count), "deduplicated": int(deduplicated_count), "retained": len(rows)},
-        "gold_set": gold_set_report(protocol.get("gold_set") or [], rows),
+        "gold_set": gold_set_report(
+            protocol.get("gold_set") or [],
+            rows,
+            year_from=protocol.get("year_from"),
+            year_to=protocol.get("year_to"),
+        ),
+        "population_estimate": estimate_population(rows),
         "source_contribution": source_contribution(rows),
         "citation_rounds": rounds,
         "citation_saturated": bool(citation_saturated),
@@ -192,6 +232,16 @@ def render_coverage_markdown(report: Dict[str, Any]) -> str:
     ]
     missing = report.get("unconsulted_sources") or []
     lines.extend([f"- {item.get('source')}: {item.get('reason')}" for item in missing] or ["- None"])
+    population = report.get("population_estimate")
+    lines.extend(["", "## Population estimate", ""])
+    if population:
+        lines.append(
+            f"- Chapman capture-recapture (PubMed/OpenAlex): {population['estimated_total']} "
+            f"(95% CI {population['ci95_low']} - {population['ci95_high']}, seen {population['seen_a']}+{population['seen_b']}, "
+            f"overlap {population['seen_both']})"
+        )
+    else:
+        lines.append("- Not estimable (both PubMed and OpenAlex records required for the overlap diagnostic)")
     lines.extend(["", "## Limitations", ""])
     lines.extend([f"- {item}" for item in report.get("limitations") or []] or ["- None recorded"])
     return "\n".join(lines) + "\n"

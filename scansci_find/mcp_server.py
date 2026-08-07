@@ -26,7 +26,7 @@ class JsonRpcMcpServer:
                 "result": {
                     "protocolVersion": "2025-06-18",
                     "capabilities": {"tools": {}},
-                    "serverInfo": {"name": "scansci-find-mcp", "version": "0.3.0"},
+                    "serverInfo": {"name": "scansci-find-mcp", "version": "0.4.0"},
                 },
             }
         if method == "tools/list":

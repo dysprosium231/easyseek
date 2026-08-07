@@ -132,6 +132,8 @@ def list_tools() -> List[Dict[str, Any]]:
                     "verify_candidate_identifiers": {"type": "boolean", "default": False},
                     "resolve_oa": {"type": "boolean", "default": False},
                     "find_preprints": {"type": "boolean", "default": False},
+                    "code_links": {"type": "boolean", "default": False},
+                    "sort": {"type": "string", "enum": ["relevance", "recency", "citations"], "default": "relevance"},
                 },
                 ["query"],
             ),
@@ -191,6 +193,49 @@ def list_tools() -> List[Dict[str, Any]]:
             "outputSchema": _schema(),
         },
         {
+            "name": "enrich_code_links",
+            "description": "Attach Papers with Code code-availability metadata (repository URL, stars, framework, official flag) to candidates.",
+            "inputSchema": _schema(
+                {
+                    "candidates": {"type": "array", "items": candidate_schema},
+                    "limit": {"type": "integer", "minimum": 0},
+                },
+                ["candidates"],
+            ),
+            "outputSchema": _schema(),
+        },
+        {
+            "name": "explore",
+            "description": "Pass 1 of the two-pass flow: quick search returning a lightweight summary table (title, year, venue, citations, PDF hint, recency flag) before deep work.",
+            "inputSchema": _schema(
+                {
+                    "query": {"type": "string"},
+                    "domain": {"type": "string", "default": "general"},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 30},
+                    "sort": {"type": "string", "enum": ["relevance", "recency", "citations"], "default": "recency"},
+                    "sources": {"type": "array", "items": {"type": "string"}},
+                },
+                ["query"],
+            ),
+            "outputSchema": _schema(),
+        },
+        {
+            "name": "deep_fetch",
+            "description": "Pass 2 of the two-pass flow: run identifier verification, OA resolution, preprint matching, and code links on confirmed candidates, with optional BibTeX.",
+            "inputSchema": _schema(
+                {
+                    "candidates": {"type": "array", "items": candidate_schema},
+                    "verify": {"type": "boolean", "default": True},
+                    "resolve_oa": {"type": "boolean", "default": True},
+                    "find_preprints": {"type": "boolean", "default": True},
+                    "code_links": {"type": "boolean", "default": True},
+                    "bibtex": {"type": "boolean", "default": True},
+                },
+                ["candidates"],
+            ),
+            "outputSchema": _schema(),
+        },
+        {
             "name": "screen_candidates",
             "description": "Screen already-collected candidates through Journal Scout quality policies.",
             "inputSchema": _schema(
@@ -226,6 +271,7 @@ def list_tools() -> List[Dict[str, Any]]:
                     "direction": {"type": "string", "enum": ["backward", "forward", "both"], "default": "both"},
                     "per_seed_limit": {"type": "integer", "minimum": 1, "maximum": 1000, "default": 20},
                     "saturation_threshold": {"type": "number", "minimum": 0, "maximum": 1, "default": 0.01},
+                    "saturation_consecutive_rounds": {"type": "integer", "minimum": 1, "maximum": 5, "default": 2},
                     "source": {"type": "string", "enum": ["semantic", "opencitations", "both"], "default": "semantic"},
                 },
                 ["candidates"],
@@ -337,6 +383,8 @@ def handle_tool_call(name: str, arguments: Dict[str, Any], service: Any) -> Dict
                 verify_candidate_identifiers=bool(arguments.get("verify_candidate_identifiers", False)),
                 resolve_oa=bool(arguments.get("resolve_oa", False)),
                 find_preprints=bool(arguments.get("find_preprints", False)),
+                code_links=bool(arguments.get("code_links", False)),
+                sort=arguments.get("sort") or "relevance",
             )
         elif name == "search_science":
             payload = service.search_science(
@@ -363,6 +411,28 @@ def handle_tool_call(name: str, arguments: Dict[str, Any], service: Any) -> Dict
                 arguments.get("candidates") or [],
                 limit=arguments.get("limit"),
             )
+        elif name == "enrich_code_links":
+            payload = service.enrich_code_links(
+                arguments.get("candidates") or [],
+                limit=arguments.get("limit"),
+            )
+        elif name == "explore":
+            payload = service.explore(
+                query=arguments.get("query", ""),
+                domain=arguments.get("domain") or "general",
+                limit=int(arguments.get("limit") or 30),
+                sort=arguments.get("sort") or "recency",
+                sources=arguments.get("sources"),
+            )
+        elif name == "deep_fetch":
+            payload = service.deep_fetch(
+                arguments.get("candidates") or [],
+                verify=bool(arguments.get("verify", True)),
+                resolve_oa=bool(arguments.get("resolve_oa", True)),
+                find_preprints=bool(arguments.get("find_preprints", True)),
+                code_links=bool(arguments.get("code_links", True)),
+                bibtex=bool(arguments.get("bibtex", True)),
+            )
         elif name == "screen_candidates":
             payload = service.screen_candidates(
                 candidates=arguments.get("candidates") or [],
@@ -385,6 +455,11 @@ def handle_tool_call(name: str, arguments: Dict[str, Any], service: Any) -> Dict
                 direction=arguments.get("direction") or "both",
                 per_seed_limit=int(arguments.get("per_seed_limit") or 20),
                 saturation_threshold=float(arguments.get("saturation_threshold") if arguments.get("saturation_threshold") is not None else 0.01),
+                saturation_consecutive_rounds=int(
+                    arguments.get("saturation_consecutive_rounds")
+                    if arguments.get("saturation_consecutive_rounds") is not None
+                    else 2
+                ),
                 source=arguments.get("source") or "semantic",
             )
         elif name == "browser_doctor":

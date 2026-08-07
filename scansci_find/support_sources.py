@@ -117,6 +117,10 @@ def _apply_oa_report(candidate: Dict[str, Any], report: Dict[str, Any]) -> None:
     access = dict(candidate.get("access") or {})
     if report.get("is_oa"):
         access.update({"fulltext_hint": "oa", "requires_login": False, "requires_institution": False})
+        access["access_status"] = "open_pdf"
+    else:
+        publisher_page = bool((candidate.get("links") or {}).get("paper") or candidate.get("source_url"))
+        access["access_status"] = "needs_institution" if (publisher_page or access.get("requires_institution")) else "no_open_pdf"
     access["oa_status"] = report.get("oa_status") or "unknown"
     access["license"] = report.get("license") or ""
     candidate["access"] = access

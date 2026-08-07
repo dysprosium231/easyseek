@@ -93,6 +93,9 @@ def merge_candidate(base: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str,
         merged["authors"] = list(incoming.get("authors") or [])
     if not merged.get("year") and incoming.get("year"):
         merged["year"] = incoming["year"]
+    if not merged.get("published_date") and incoming.get("published_date"):
+        merged["published_date"] = incoming["published_date"]
+    merged["citation_count"] = max(int(merged.get("citation_count") or 0), int(incoming.get("citation_count") or 0))
     merged["doi"] = normalize_article_doi(merged.get("doi"))
     merged["arxiv_id"] = normalize_arxiv_id(merged.get("arxiv_id"))
     identifiers = dict(merged.get("identifiers") or {})

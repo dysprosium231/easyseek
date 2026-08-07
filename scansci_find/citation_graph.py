@@ -267,6 +267,7 @@ def expand_citations(
     direction: str = "both",
     per_seed_limit: int = 20,
     saturation_threshold: float = 0.01,
+    saturation_consecutive_rounds: int = 2,
     provider: Optional[Any] = None,
 ) -> Dict[str, Any]:
     if rounds < 0 or rounds > 5:
@@ -275,6 +276,8 @@ def expand_citations(
         raise ValueError("direction must be backward, forward, or both")
     if not 0 <= saturation_threshold <= 1:
         raise ValueError("saturation_threshold must be between 0 and 1")
+    if saturation_consecutive_rounds < 1:
+        raise ValueError("saturation_consecutive_rounds must be at least 1")
 
     provider = provider or SemanticScholarCitationProvider()
     initial = dedupe_with_clusters(seeds)
@@ -282,6 +285,7 @@ def expand_citations(
     frontier = list(accumulated)
     round_reports = []
     failures = []
+    below_threshold_streak = 0
     for round_number in range(1, rounds + 1):
         fetched = []
         attempted = 0
@@ -322,7 +326,10 @@ def expand_citations(
         )
         accumulated = merged["candidates"]
         frontier = new_rows
-        if not frontier or novelty <= saturation_threshold:
+        # Saturation requires consecutive below-threshold rounds, so a single
+        # quiet round cannot prematurely end the closure.
+        below_threshold_streak = below_threshold_streak + 1 if novelty <= saturation_threshold else 0
+        if not frontier or below_threshold_streak >= saturation_consecutive_rounds:
             break
     final = dedupe_with_clusters(accumulated)
     return {
@@ -331,5 +338,8 @@ def expand_citations(
         "rounds": round_reports,
         "failures": failures,
         "citation_source": getattr(provider, "name", type(provider).__name__),
-        "saturated": bool(round_reports and (not frontier or round_reports[-1]["novelty_ratio"] <= saturation_threshold)),
+        "saturated": bool(
+            round_reports
+            and (not frontier or below_threshold_streak >= saturation_consecutive_rounds)
+        ),
     }

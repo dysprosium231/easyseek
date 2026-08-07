@@ -82,10 +82,37 @@ def build_parser() -> argparse.ArgumentParser:
     preprints.add_argument("input")
     preprints.add_argument("--out")
     preprints.add_argument("--limit", type=int)
+    codes = sub.add_parser("codes", help="Attach Papers with Code code-availability metadata to candidates.")
+    codes.add_argument("input")
+    codes.add_argument("--out")
+    codes.add_argument("--limit", type=int)
+    benchmark = sub.add_parser("benchmark", help="Sample sources and measure abstract coverage per source and publisher (reproducible).")
+    benchmark.add_argument("query")
+    benchmark.add_argument("--domain", choices=sorted(DOMAIN_PROFILES), default="general")
+    benchmark.add_argument("--source", action="append", dest="sources")
+    benchmark.add_argument("--sample-size", type=int, default=100)
+    benchmark.add_argument("--out", required=True)
+    reconcile = sub.add_parser("reconcile", help="Write actual download outcomes (download_results.json from scansci-pdf) back into a find run's candidates.")
+    reconcile.add_argument("runs_dir")
+    explore = sub.add_parser("explore", help="Pass 1: quick search with a lightweight summary table before deep work.")
+    explore.add_argument("query")
+    explore.add_argument("--domain", choices=sorted(DOMAIN_PROFILES), default="general")
+    explore.add_argument("--limit", type=int, default=30)
+    explore.add_argument("--sort", choices=["relevance", "recency", "citations"], default="recency")
+    explore.add_argument("--out")
+    deep_fetch = sub.add_parser("deep-fetch", help="Pass 2: run verification/OA/preprint/code enrichment on confirmed candidates.")
+    deep_fetch.add_argument("input")
+    deep_fetch.add_argument("--no-verify", action="store_true")
+    deep_fetch.add_argument("--no-oa", action="store_true")
+    deep_fetch.add_argument("--no-preprints", action="store_true")
+    deep_fetch.add_argument("--no-code", action="store_true")
+    deep_fetch.add_argument("--no-bibtex", action="store_true")
+    deep_fetch.add_argument("--out")
     search = sub.add_parser("search", help="Search science sources and write ScanSci Find artifacts.")
     search.add_argument("query")
     search.add_argument("--quality")
     search.add_argument("--mode", choices=["boost", "hard"])
+    search.add_argument("--sort", choices=["relevance", "recency", "citations"], default="relevance", help="Order results: relevance score, recency-first (last 6 months flagged [new]), or citation count.")
     search.add_argument("--profile", choices=["paper", "research_data"], default="paper")
     search.add_argument("--domain", choices=sorted(DOMAIN_PROFILES))
     search.add_argument("--depth", choices=sorted(DEPTH_PROFILES), default="standard")
@@ -99,6 +126,7 @@ def build_parser() -> argparse.ArgumentParser:
     search.add_argument("--verify-identifiers", action="store_true", help="Verify DOI, PMID, or arXiv identifiers against authoritative metadata APIs.")
     search.add_argument("--resolve-oa", action="store_true", help="Resolve DOI open-access locations through Unpaywall.")
     search.add_argument("--find-preprints", action="store_true", help="Find lawful preprint copies (arXiv, bioRxiv, medRxiv, SSRN) of paywalled candidates.")
+    search.add_argument("--code-links", action="store_true", help="Attach Papers with Code code-availability metadata to candidates.")
     search.add_argument("--out", required=True)
     search.add_argument("--limit", type=int, default=10)
     search.add_argument("--source", action="append", dest="sources")
@@ -266,6 +294,7 @@ def run_search(args: argparse.Namespace) -> int:
         verification_report = {}
         oa_report = {}
         preprint_report = {}
+        code_report = {}
     else:
         service = ScanSciFindService()
         result = service.search_academic(
@@ -289,6 +318,8 @@ def run_search(args: argparse.Namespace) -> int:
             verify_candidate_identifiers=args.verify_identifiers,
             resolve_oa=args.resolve_oa,
             find_preprints=args.find_preprints,
+            code_links=args.code_links,
+            sort=args.sort,
         )
         screened = result["candidates"]
         quality = result.get("quality") or quality
@@ -306,6 +337,7 @@ def run_search(args: argparse.Namespace) -> int:
         verification_report = result.get("verification_report") or {}
         oa_report = result.get("oa_report") or {}
         preprint_report = result.get("preprint_report") or {}
+        code_report = result.get("code_report") or {}
     if args.fixture:
         citation_report = {}
     write_outputs(
@@ -328,6 +360,7 @@ def run_search(args: argparse.Namespace) -> int:
         verification_report=verification_report,
         oa_report=oa_report,
         preprint_report=preprint_report,
+        code_report=code_report,
     )
     print(json.dumps({"out": str(Path(args.out)), "total": len(screened)}, ensure_ascii=False))
     return 0
@@ -375,15 +408,55 @@ def main(argv: Optional[List[str]] = None) -> int:
             )
         _emit_payload(payload, args.out)
         return 0
-    if args.command in {"verify", "resolve-oa", "preprints"}:
+    if args.command in {"verify", "resolve-oa", "preprints", "codes"}:
         candidates = _load_candidates(Path(args.input))
         service = ScanSciFindService()
         if args.command == "verify":
             payload = service.verify_identifiers(candidates, limit=args.limit)
         elif args.command == "resolve-oa":
             payload = service.resolve_open_access(candidates, limit=args.limit)
-        else:
+        elif args.command == "preprints":
             payload = service.find_preprints(candidates, limit=args.limit)
+        else:
+            payload = service.enrich_code_links(candidates, limit=args.limit)
+        _emit_payload(payload, args.out)
+        return 0
+    if args.command == "benchmark":
+        from scansci_find.benchmark import run_benchmark, write_benchmark
+
+        sources = []
+        for item in args.sources or []:
+            sources.extend(part.strip() for part in str(item).split(",") if part.strip())
+        report = run_benchmark(args.query, domain=args.domain, sources=sources or None, sample_size=args.sample_size)
+        artifact = write_benchmark(report, Path(args.out))
+        print(json.dumps({"out": str(artifact), "record_count": report.get("record_count", 0)}, ensure_ascii=False))
+        return 0
+    if args.command == "reconcile":
+        from scansci_find.reconcile import reconcile
+
+        report = reconcile(args.runs_dir)
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+        return 0
+    if args.command == "explore":
+        payload = ScanSciFindService().explore(
+            args.query,
+            domain=args.domain,
+            limit=args.limit,
+            sort=args.sort,
+        )
+        print(payload["summary"].get("markdown") or "No candidates.")
+        _emit_payload(payload, args.out)
+        return 0
+    if args.command == "deep-fetch":
+        candidates = _load_candidates(Path(args.input))
+        payload = ScanSciFindService().deep_fetch(
+            candidates,
+            verify=not args.no_verify,
+            resolve_oa=not args.no_oa,
+            find_preprints=not args.no_preprints,
+            code_links=not args.no_code,
+            bibtex=not args.no_bibtex,
+        )
         _emit_payload(payload, args.out)
         return 0
     if args.command == "search":

@@ -99,7 +99,7 @@ class JournalScoutMcpGateway:
                 "params": {
                     "protocolVersion": "2025-06-18",
                     "capabilities": {},
-                    "clientInfo": {"name": "scansci-find", "version": "0.3.0"},
+                    "clientInfo": {"name": "scansci-find", "version": "0.4.0"},
                 },
             }
             tool_call = {"jsonrpc": "2.0", "id": 2, "method": "tools/call", "params": {"name": name, "arguments": arguments}}

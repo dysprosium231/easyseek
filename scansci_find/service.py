@@ -20,6 +20,7 @@ from scansci_find.journal_scout import JournalScoutMcpGateway
 from scansci_find.outputs import build_download_queue, enrich_download_metadata
 from scansci_find.preprint import PreprintFinder, find_preprints as find_preprints_batch
 from scansci_find.protocol import build_protocol
+from scansci_find.pwc import PwcProvider, enrich_code_availability as enrich_code_batch
 from scansci_find.quality import apply_quality
 from scansci_find.source_registry import DEPTH_PROFILES, SUPPORT_SOURCE_ROUTES, list_domains, list_sources as registry_sources
 from scansci_find.support_sources import UnpaywallProvider, resolve_open_access as resolve_oa_batch
@@ -71,18 +72,20 @@ class ScanSciFindService:
         identifier_verifier: Optional[Any] = None,
         oa_resolver: Optional[Any] = None,
         preprint_finder: Optional[Any] = None,
+        pwc_provider: Optional[Any] = None,
     ) -> None:
         self.journal_gateway = journal_gateway or JournalScoutMcpGateway()
         self.providers = providers
         self.identifier_verifier = identifier_verifier
         self.oa_resolver = oa_resolver
         self.preprint_finder = preprint_finder
+        self.pwc_provider = pwc_provider
 
     def health_check(self) -> Dict[str, Any]:
         journal = self.journal_gateway.health_check()
         return {
             "service": "scansci-find",
-            "version": "0.3.0",
+            "version": "0.4.0",
             "layers": {"capability": "MCP", "cognitive": "Skill", "human_entry": "CLI", "distribution": "Plugin"},
             "journal_scout": journal,
             "sources": self.list_sources(),
@@ -295,6 +298,8 @@ class ScanSciFindService:
         verify_candidate_identifiers: bool = False,
         resolve_oa: bool = False,
         find_preprints: bool = False,
+        code_links: bool = False,
+        sort: str = "relevance",
     ) -> Dict[str, Any]:
         protocol = build_protocol(
             query,
@@ -337,7 +342,7 @@ class ScanSciFindService:
                 "source_status": search_result["source_status"],
             }
         else:
-            screened = apply_quality(deduped, self.journal_gateway, policy=quality, mode=mode, filters=filters)
+            screened = apply_quality(deduped, self.journal_gateway, policy=quality, mode=mode, filters=filters, sort=sort)
             enrich_download_metadata(screened)
             result = {
                 "query": query,
@@ -359,11 +364,12 @@ class ScanSciFindService:
                 direction="both",
                 per_seed_limit=min(100, max(10, per_source_limit)),
                 saturation_threshold=protocol.saturation_threshold,
+                saturation_consecutive_rounds=protocol.saturation_consecutive_rounds,
                 provider=build_citation_provider(citation_source),
             )
             additions = [item for item in citation_result["candidates"] if item.get("canonical_id") not in seed_ids]
             if additions:
-                screened_additions = apply_quality(additions, self.journal_gateway, policy=quality, mode=mode, filters=filters)
+                screened_additions = apply_quality(additions, self.journal_gateway, policy=quality, mode=mode, filters=filters, sort=sort)
                 enrich_download_metadata(screened_additions)
                 attach_evidence_dimensions(screened_additions)
                 screened = dedupe_candidates(screened + screened_additions)[:limit]
@@ -389,6 +395,12 @@ class ScanSciFindService:
             result["candidates"] = screened
             # Rebuild download entries so the queue carries preprint identifiers.
             enrich_download_metadata(screened)
+
+        code_result: Dict[str, Any] = {"checked": 0, "unchecked": len(screened), "matched": 0, "status_counts": {}}
+        if code_links and profile == "paper" and screened:
+            code_result = enrich_code_batch(screened, provider=self.pwc_provider or PwcProvider())
+            screened = code_result.pop("candidates")
+            result["candidates"] = screened
         attach_evidence_dimensions(screened)
 
         human_queue = build_human_queue(screened)
@@ -429,6 +441,7 @@ class ScanSciFindService:
                 "verification_report": verification_result,
                 "oa_report": oa_result,
                 "preprint_report": preprint_result,
+                "code_report": code_result,
                 "raw_total": audited_raw_count,
                 "deduplicated_total": audited_deduplicated_count,
             }
@@ -441,8 +454,9 @@ class ScanSciFindService:
         quality: str = "high_quality_broad",
         mode: str = "boost",
         filters: Optional[Dict[str, Any]] = None,
+        sort: str = "relevance",
     ) -> Dict[str, Any]:
-        screened = apply_quality(dedupe_candidates(candidates), self.journal_gateway, policy=quality, mode=mode, filters=filters)
+        screened = apply_quality(dedupe_candidates(candidates), self.journal_gateway, policy=quality, mode=mode, filters=filters, sort=sort)
         enrich_download_metadata(screened)
         return {"quality": quality, "mode": mode, "total": len(screened), "candidates": screened}
 
@@ -465,6 +479,7 @@ class ScanSciFindService:
         direction: str = "both",
         per_seed_limit: int = 20,
         saturation_threshold: float = 0.01,
+        saturation_consecutive_rounds: int = 2,
         source: str = "semantic",
     ) -> Dict[str, Any]:
         return expand_citation_graph(
@@ -473,6 +488,7 @@ class ScanSciFindService:
             direction=direction,
             per_seed_limit=per_seed_limit,
             saturation_threshold=saturation_threshold,
+            saturation_consecutive_rounds=saturation_consecutive_rounds,
             provider=build_citation_provider(source),
         )
 
@@ -503,6 +519,75 @@ class ScanSciFindService:
         enrich_download_metadata(result["candidates"])
         attach_evidence_dimensions(result["candidates"])
         return result
+
+    def enrich_code_links(self, candidates: List[Dict[str, Any]], limit: Optional[int] = None) -> Dict[str, Any]:
+        result = enrich_code_batch(
+            candidates,
+            provider=self.pwc_provider or PwcProvider(),
+            limit=limit,
+        )
+        attach_evidence_dimensions(result["candidates"])
+        return result
+
+    def explore(
+        self,
+        query: str,
+        *,
+        domain: str = "general",
+        limit: int = 30,
+        sort: str = "recency",
+        sources: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Pass 1: quick search producing a lightweight summary table."""
+        from scansci_find.two_pass import render_summary_markdown, summarize_candidates
+
+        result = self.search_academic(
+            query,
+            domain=domain,
+            depth="quick",
+            sort=sort,
+            limit=limit,
+            sources=sources,
+        )
+        summary = summarize_candidates(result["candidates"])
+        summary["markdown"] = render_summary_markdown(summary)
+        return {
+            "summary": summary,
+            "candidates": result["candidates"],
+            "source_status": result.get("source_status") or [],
+        }
+
+    def deep_fetch(
+        self,
+        candidates: List[Dict[str, Any]],
+        *,
+        verify: bool = True,
+        resolve_oa: bool = True,
+        find_preprints: bool = True,
+        code_links: bool = True,
+        bibtex: bool = True,
+    ) -> Dict[str, Any]:
+        """Pass 2: run the full enrichment chain on the confirmed subset."""
+        from scansci_find.outputs import render_refs_bib
+
+        rows = [dict(candidate) for candidate in candidates]
+        reports: Dict[str, Any] = {}
+        if verify and rows:
+            reports["verification"] = self.verify_identifiers(rows)
+            rows = reports["verification"].pop("candidates")
+        if resolve_oa and rows:
+            reports["oa"] = self.resolve_open_access(rows)
+            rows = reports["oa"].pop("candidates")
+        if find_preprints and rows:
+            reports["preprints"] = self.find_preprints(rows)
+            rows = reports["preprints"].pop("candidates")
+        if code_links and rows:
+            reports["code"] = self.enrich_code_links(rows)
+            rows = reports["code"].pop("candidates")
+        payload: Dict[str, Any] = {"candidates": rows, "reports": reports}
+        if bibtex:
+            payload["bibtex"] = render_refs_bib(rows)
+        return payload
 
     def _mark_research_data_candidates(self, candidates: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         out = []
