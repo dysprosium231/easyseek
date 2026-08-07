@@ -1,20 +1,35 @@
-# ScanSci Find
+# ScanSci Find — 领域无关、可审计的多源学术发现引擎
 
-ScanSci Find is a domain-neutral, auditable academic discovery layer for ScanSci. It searches and normalizes scholarly records, records what was and was not consulted, keeps journal-level evidence separate from article validity, and hands verified identifiers to ScanSci PDF and Zotero workflows.
+> Domain-neutral, auditable, multi-source academic discovery for ScanSci.
+
+ScanSci Find 是 ScanSci 的学术发现层：把"找文献"当作工程来做。它跨源检索并归一化学术记录、如实记录哪些源被咨询过而哪些没有、把期刊级证据与文章有效性严格分开，并把验证过的标识符交给 ScanSci PDF 与 Zotero 工作流。检索协议先行、召回可测量、每个结论都落成可复核的工件。
+
+ScanSci Find is the academic discovery layer of ScanSci: it treats literature search as engineering. It searches and normalizes scholarly records across many sources, records what was and was not consulted, keeps journal-level evidence separate from article validity, and hands verified identifiers to ScanSci PDF and Zotero workflows. Protocols come first, recall is measurable, and every claim lands as an auditable artifact.
+
+## 产品边界 / Product boundaries
+
+- **MCP** 是能力层 / the capability layer。
+- **Skill** 是认知编排层 / the cognitive orchestration layer。
+- **CLI** 是可复现的人工与测试入口 / the reproducible human and test entrypoint。
+- **Journal Scout** 提供期刊级证据，但**不**判定单篇文章是否有效 / supplies venue-level evidence; it does not determine whether an individual article is valid。
+- **ScanSci PDF** 负责合法全文获取；ScanSci Find 只产出队列与访问证据 / handles lawful full-text retrieval; ScanSci Find emits queues and access evidence。
+- 浏览器与机构源始终是显式适配器。ScanSci Find 不绕过登录、验证码、订阅或出版商管控 / Browser-backed and institutional sources remain explicit adapters. ScanSci Find does not bypass login, captcha, subscriptions, or publisher controls.
+
+医学通过可选 domain profile 支持：默认身份与查询模型是一般学术研究，PICO、PubMed、Europe PMC 与临床试验源只在任务需要时激活。
 
 Medicine is supported through an optional domain profile. The default identity and query model are general academic research; PICO, PubMed, Europe PMC, and clinical-trial sources are activated only when the task calls for them.
 
-## Product boundaries
+## 一分钟开始 / Quick Start
 
-- MCP is the capability layer.
-- Skill is the cognitive orchestration layer.
-- CLI is the reproducible human and test entrypoint.
-- Plugin is the ScanSci distribution layer.
-- Journal Scout supplies venue-level evidence; it does not determine whether an individual article is valid.
-- ScanSci PDF handles lawful full-text retrieval; ScanSci Find emits queues and access evidence.
-- Browser-backed and institutional sources remain explicit adapters. ScanSci Find does not bypass login, captcha, subscriptions, or publisher controls.
+```powershell
+python -m pip install -e .          # Python 3.11+，核心零依赖 / core has zero mandatory deps
+scansci-find search "urban heat island" --depth standard --verify-identifiers --resolve-oa --find-preprints --out runs/heat
+scansci-find explore "diffusion models" --domain medicine --limit 30    # 两遍交互：先出摘要表
+scansci-find deep-fetch runs/explore.json --out runs/explore-deep.json # 确认核心论文后深拉
+scansci-find benchmark "urban heat island" --sample-size 100 --out runs/bench   # 可复现的覆盖率基准
+```
 
-## Search workflow
+## 检索流水线 / The Pipeline
 
 ```text
 question -> protocol -> volume estimate -> 4-record smoke test
@@ -23,238 +38,124 @@ question -> protocol -> volume estimate -> 4-record smoke test
          -> identifier/OA verification -> coverage/PRISMA -> PDF/Zotero handoff
 ```
 
-The protocol separates four concepts that older search tools often blur:
+协议把旧式检索工具常混淆的四件事严格分开 / The protocol separates four concepts that older search tools often blur:
 
-1. A source can be registered without being executable on the current machine.
-2. A source can be queried without providing full text.
-3. Journal evidence is not article-level evidence.
-4. A run is not systematic unless pagination, planned-source coverage, gold-set checks, and citation closure are actually complete.
+1. 源被注册 ≠ 在当前机器可执行 / a source can be registered without being executable。
+2. 源可查询 ≠ 提供全文 / a source can be queried without providing full text。
+3. 期刊证据 ≠ 文章级证据 / journal evidence is not article-level evidence。
+4. 分页、源覆盖、金标准与引文闭包全部完成，才谈得上 systematic / a run is not systematic unless pagination, planned-source coverage, gold-set checks, and citation closure are actually complete。
 
-## Install for local development
+## 能做什么 / Capabilities
 
-```powershell
-python -m pip install -e .
-```
+### 检索与路由 / Search & routing
 
-The package requires Python 3.11+ and has no mandatory runtime dependencies beyond the standard library.
+| 能力 | 说明（中 / EN） |
+|---|---|
+| 13 源联邦 | OpenAlex / Crossref / Semantic Scholar / arXiv / DBLP / PubMed / Europe PMC / Zenodo / DataCite / OpenML / Hugging Face / Kaggle / 百度学术 / CNKI，按 domain 路由 / federated with domain routing |
+| CDP 浏览器源 | Google Scholar 与 CNKI 驱动用户自己的 Chrome（远程调试），登录态自动携带、无凭证处理；`pip install scansci-find[cdp]` / drive your own Chrome for Scholar & CNKI, login state without credentials |
+| query 扩展 | 内置缩写-全称双向对与学科同义词，纯函数、协议指纹稳定；`SCANSCI_FIND_VOCAB_DIR` 可加自定义词表 / deterministic expansion, stable protocol ids, user vocab supported |
+| 排序 | `--sort relevance\|recency\|citations`；recency 把近 6 个月文献标 `[新]` 置顶 / recency-first with a `[新]` flag |
+| 中文路由 | `--domain chinese_general --cn`，CNKI / 百度学术 / Wanfang / CQVIP / NSSD / Chinese explicit routing |
 
-## CLI
+### 增强 / Enrichment
 
-Inspect the source and domain registry:
+- **预印本匹配 / preprint matching**：付费墙论文按"标题相似 + 作者或年份"保守匹配 arXiv 与 Europe PMC PPR（bioRxiv / medRxiv / SSRN / Research Square）的开放版本，只增不改 / finds lawful open copies of paywalled papers, never mutates identity。
+- **代码补全 / code links**：Papers with Code 免 key 补全代码仓库（官方优先、按 star 排序）/ official-first repository metadata。
+- **OA 解析 / OA resolution**：聚合候选自带的 OpenAlex / Semantic Scholar / Europe PMC 链接后再消耗 Unpaywall 配额，并发解析 / multi-resolver aggregation before Unpaywall quota。
+- **标识符验证 / verification**：DOI→Crossref、PMID→PubMed、arXiv→arXiv 交叉验证，区分 verified / partial / mismatch / not_found。
+- **引文闭包 / citation chasing**：Semantic Scholar + OpenCitations 双向扩展，连续两轮 novelty 低于阈值才算饱和 / consecutive-round saturation。
 
-```powershell
-scansci-find sources
-```
+### 交互 / Interaction
 
-Build a protocol without searching:
+- **explore**（两遍策略第一遍）：quick 检索 → 轻量摘要表（标题/年份/Venue/引用数/PDF 提示/`[新]`），不拉摘要 / pass 1: lightweight summary table。
+- **deep-fetch**（第二遍）：对确认的核心论文跑 验证 + OA + 预印本 + 代码 + BibTeX / pass 2: full enrichment on the confirmed subset。
 
-```powershell
-scansci-find plan "urban heat adaptation" --domain environmental_science --depth standard
-```
+### 测量与审计 / Measurement & audit
 
-For high-recall work, validate the protocol before the full run:
+- **Chapman 捕获-再捕获**：PubMed∩OpenAlex 重叠估算文献总量与 95% CI，进 coverage report / population estimation from two-source overlap。
+- **PRISMA 拒渲染**：计数不自洽时拒绝出 PRISMA.md，改写 `prisma_inconsistency.md` / refuses to render inconsistent counts。
+- **`benchmark` 命令**：按 DOI 前缀分类出版商，实测各源摘要覆盖率——可复现的测量，而非一次性声明 / reproducible per-source & per-publisher coverage measurements。
+- **金标准窗口召回**：`found_in_window` / `found_out_of_window` / `found_undated` 分桶 / window-bucketed gold-set recall。
 
-```powershell
-scansci-find estimate "urban heat adaptation" --domain environmental_science --depth systematic
-scansci-find smoke "urban heat adaptation" --domain environmental_science
-scansci-find calibrate "urban heat adaptation" --domain environmental_science --depth systematic --sample-size 100
-```
+### 产物与闭环 / Artifacts & closed loop
 
-Run a general academic search:
+`candidates.json`、`download_queue.json`、`oa_manifest.json`（open_pdf 直接下载 / needs_institution 走机构阶段的路由清单）、`coverage_report`、`PRISMA.md`、`benchmark_report`、`preprint_report.json`、`code_report.json` 等。
 
-```powershell
-scansci-find search "urban ecology pollinator diversity" --domain general --depth standard --out runs/urban-ecology
-```
-
-Run citation chasing, identifier verification, OA resolution, and preprint matching explicitly when needed:
-
-```powershell
-scansci-find search "urban ecology pollinator diversity" --domain general --depth systematic --expand-citations --citation-source both --verify-identifiers --resolve-oa --find-preprints --out runs/urban-ecology-systematic
-```
-
-`--resolve-oa` requires `UNPAYWALL_EMAIL` or `SCANSCI_FIND_CONTACT_EMAIL`. Identifier, OA, and preprint support can also be run on an existing candidate file with `scansci-find verify`, `scansci-find resolve-oa`, and `scansci-find preprints`. Preprint matching searches arXiv and the Europe PMC Preprint Citation Index (bioRxiv, medRxiv, SSRN, Research Square) using conservative title-plus-author-or-year matching, and only enriches paywalled candidates — it never modifies a candidate's DOI or arXiv identity.
-
-Order results by recency or citations instead of relevance, and attach Papers with Code code links:
+与 ScanSci PDF 形成闭环 / Closed loop with ScanSci PDF:
 
 ```powershell
-scansci-find search "time series forecasting" --sort recency --code-links --out runs/ts-recency
+scansci-pdf manifest runs/x/oa_manifest.json --output runs/x/pdfs   # 按 manifest 路由下载
+scansci-pdf batch queue.txt --scihub --runs-dir runs/x              # 队列 + 预印本兜底（付费墙失败自动用 arXiv 版重试）
+scansci-find reconcile runs/x                                       # 下载结果回写候选：downloaded / anti_bot_blocked / html_not_pdf
 ```
 
-Interactive two-pass exploration (pass 1 summary table, then deep fetch on the confirmed subset):
+## 命令速查 / CLI reference
 
-```powershell
-scansci-find explore "diffusion models in medical imaging" --domain medicine --limit 30 --out runs/explore.json
-scansci-find deep-fetch runs/explore.json --out runs/explore-deep.json
-```
+| 命令 | 用途 / Purpose |
+|---|---|
+| `scansci-find plan / estimate / smoke / calibrate` | 协议先行：构建检索协议、预估量级、4 条冒烟契约校验、100 条校准（人工队列 >15% 即停）/ protocol → estimate → smoke → calibrate gates |
+| `scansci-find search` | 全量检索 + 审计产物 / full search with audit artifacts（`--expand-citations --verify-identifiers --resolve-oa --find-preprints --code-links --sort`）|
+| `scansci-find explore / deep-fetch` | 两遍交互 / two-pass interaction |
+| `scansci-find verify / resolve-oa / preprints / codes` | 对已有候选文件单独跑验证/OA/预印本/代码补全 / standalone enrichment on candidate files |
+| `scansci-find benchmark` | 可复现覆盖率基准 / reproducible coverage benchmark |
+| `scansci-find reconcile <runs-dir>` | 把 ScanSci PDF 下载结果回写候选 / write download outcomes back |
+| `scansci-find browser-doctor / sources` | 浏览器运行时探测 / 源目录 / browser runtime & source registry |
 
-Reproducible retrieval benchmarks (abstract coverage per source and per publisher, by DOI prefix):
+## 深度与领域 / Depth & domains
 
-```powershell
-scansci-find benchmark "urban heat island" --sources openalex,pubmed,arxiv --sample-size 100 --out runs/bench-uhi
-```
+| 深度 | 用途 / Use | 每源上限 / Ceiling | 引文轮数 / Rounds | 结论边界 / Claim |
+|---|---:|---:|---|
+| `quick` | 方向感与种子发现 / orientation | 20 | 0 | bounded search |
+| `standard` | 常规综述 / normal review | 100 | 1 计划 | 闭包完成前保持 bounded |
+| `systematic` | 高召回协议 / high-recall | 500 | 至多 3 | 无审计证据绝不称 complete |
 
-Use medicine only when requested:
+领域 profile：`general`（默认）、`interdisciplinary`、`computer_science`、`engineering`、`natural_sciences`、`mathematics`、`physics_astronomy`、`chemistry_materials`、`earth_sciences`、`agriculture`、`medicine`、`life_sciences`、`public_health`、`social_sciences`、`education`、`psychology`、`law`、`humanities`、`economics`、`environmental_science`、`chinese_general`、`research_data`。PICO/PECO、SPIDER/PICo 等是可选模板，不是默认前提。
 
-```powershell
-scansci-find search "remote monitoring after cardiac surgery" --domain medicine --depth standard --out runs/cardiac-monitoring
-```
+## MCP 工具 / MCP tools
 
-Route Chinese literature explicitly:
+新工作流 / New workflows：`plan_search`、`estimate_search`、`smoke_search`、`calibrate_search`、`search_academic`、`expand_citations`、`verify_identifiers`、`resolve_open_access`、`find_preprints`、`enrich_code_links`、`explore`、`deep_fetch`。
 
-```powershell
-scansci-find search "城市热岛 遥感" --domain chinese_general --cn --field title --year 2020:2026 --exclude-warning --out runs/cn-heat-island
-scansci-find search "遥感 土地利用" --source cnki,baidu-scholar --doc-type journal --quality domestic_core --out runs/cn-land-use
-```
+v0.1 兼容工具 / Legacy tools：`health_check`、`list_sources`、`search_science`、`screen_candidates`、`explain_candidate`、`build_download_queue`、`browser_doctor`。
 
-Research-data discovery remains a separate quality profile:
+## 配置 / Configuration
 
-```powershell
-scansci-find search "pollinator image dataset" --profile research_data --domain research_data --out runs/pollinator-data
-```
+把 `.env.example` 的值复制到自己的环境或本地忽略文件。绝不提交 API key、机构凭证、cookie 或浏览器 profile。
 
-`--fixture <path>` runs deterministic tests or demonstrations without live network calls.
-
-## Depth profiles
-
-| Depth | Intended use | Per-source ceiling | Citation rounds | Claim boundary |
-|---|---|---:|---:|---|
-| `quick` | orientation and seed discovery | 20 | 0 | bounded search |
-| `standard` | normal literature review | 100 | 1 planned | bounded until closure is run |
-| `systematic` | high-recall protocol | 500 | up to 3 | never called complete without audit evidence |
-
-## Domain profiles
-
-The default `general` profile uses concept blocks and the cross-disciplinary metadata backbone. Additional profiles include `interdisciplinary`, `computer_science`, `engineering`, `natural_sciences`, `mathematics`, `physics_astronomy`, `chemistry_materials`, `earth_sciences`, `agriculture`, `medicine`, `life_sciences`, `public_health`, `social_sciences`, `education`, `psychology`, `law`, `humanities`, `economics`, `environmental_science`, `chinese_general`, and `research_data`.
-
-Medical frameworks such as PICO/PECO and social-science frameworks such as SPIDER/PICo are optional protocol templates, not universal assumptions.
-
-## Source architecture
-
-Native connectors currently include:
-
-- OpenAlex, Crossref, Semantic Scholar
-- OpenCitations citation expansion and Meta enrichment; Unpaywall OA resolution
-- arXiv, DBLP
-- PubMed, Europe PMC
-- Zenodo, DataCite, OpenML, Hugging Face Datasets, Kaggle
-- Baidu Scholar, an external authorized CNKI MCP command, and Papers with Code code availability
-- Google Scholar and CNKI via CDP: drives the user's own Chrome (remote debugging enabled via `chrome://inspect/#remote-debugging`), so login state carries over without any credential handling; requires `pip install scansci-find[cdp]` and degrades gracefully otherwise
-
-The registry also describes contract-backed sources such as CORE, BASE, OpenAIRE, DOAJ, HAL, OSF Preprints, SciELO, Redalyc, OpenReview, CVF, zbMATH Open, MathSciNet, NASA ADS, INSPIRE HEP, ChemRxiv, AGRICOLA, ERIC, APA PsycInfo, NSSD, Wanfang, CQVIP, Web of Science, Scopus, Dimensions, The Lens, ProQuest Dissertations, ScienceDirect, IEEE Xplore, ACM DL, SSRN, JSTOR, DOAB, WorldCat, and ClinicalTrials.gov. Registration does not imply that credentials or an adapter are available; every run reports missing and unconsulted sources.
-
-Discovery sources are kept separate from support routes. OpenCitations is implemented for citation expansion, Unpaywall for OA resolution, and Crossref/PubMed/arXiv for identity checks; they are not treated as interchangeable keyword-search databases.
-
-## Run artifacts
-
-Backward-compatible artifacts remain available:
-
-- `candidates.json`
-- `papers.md`
-- `quality_report.json`
-- `download_queue.json`
-- `refs.bib`
-- `source_report.json`
-- `data_queue.json` when relevant
-
-Auditable v0.2 artifacts add:
-
-- `protocol.json`
-- `run_manifest.json`
-- `candidates.jsonl`
-- `dedupe_clusters.json`
-- `filter_report.json`
-- `coverage_report.json` and `coverage_report.md`
-- `prisma.json` and `PRISMA.md`
-- `human_queue.csv`
-- `evidence_table.csv`
-- `dois.md`, `references.md`, and `references.bib`
-- `zotero_items.json`
-
-v0.3 adds:
-
-- `citation_rounds.json` with the selected citation source, novelty, saturation, and partial failures
-- `identifier_verification.json` for DOI/PMID/arXiv resolution and metadata mismatch status
-- `oa_report.json` for Unpaywall OA locations and licenses (including which resolvers contributed OA links)
-- `preprint_report.json` for matched preprint copies of paywalled candidates (arXiv / Europe PMC PPR)
-- `code_report.json` for Papers with Code code-availability metadata
-- `oa_manifest.json` routing each record to direct download (`eligible`) or the institutional phase, by full-text status
-- optional `estimate_report.json`, `smoke_report.json`, and `calibration_report.json` for staged workflows
-- `benchmark_report.json` / `benchmark_report.md` from the `benchmark` command (reproducible coverage measurements)
-
-`download_queue.json` entries may carry `preprint_identifiers` (arXiv IDs of matched open versions) that ScanSci PDF can download directly — including as fallbacks when a paywalled DOI fails. `coverage_report` includes a Chapman capture-recapture population estimate when both PubMed and OpenAlex contributed records, and gold-set recall is bucketed into `found_in_window` / `found_out_of_window` / `found_undated`. When PRISMA counts are inconsistent, `PRISMA.md` is refused and `prisma_inconsistency.md` records why.
-
-After ScanSci PDF runs (`scansci-pdf batch` or `scansci-pdf manifest`), `scansci-find reconcile <runs-dir>` writes the actual download outcomes back into `candidates.json`: successful downloads become `access_status=downloaded` (with the winning source), paywall failures `needs_institution`, Cloudflare/captcha failures `anti_bot_blocked`, and HTML/not-a-PDF responses `html_not_pdf` — the full-text status then reflects reality rather than prediction.
-
-`coverage_report` explicitly records omitted sources, incomplete pagination, missing gold sets, and incomplete citation closure. A `systematic` request remains `bounded_search` until those conditions are satisfied.
-
-## MCP
-
-```powershell
-scansci-find-mcp
-```
-
-New workflows should use:
-
-- `plan_search`
-- `estimate_search`
-- `smoke_search`
-- `calibrate_search`
-- `search_academic`
-- `expand_citations`
-- `verify_identifiers`
-- `resolve_open_access`
-- `find_preprints`
-- `enrich_code_links`
-- `explore` (two-pass pass 1: summary table)
-- `deep_fetch` (two-pass pass 2: verification + OA + preprints + code + BibTeX)
-
-The v0.1 tools remain available for compatibility:
-
-- `health_check`
-- `list_sources`
-- `search_science`
-- `screen_candidates`
-- `explain_candidate`
-- `build_download_queue`
-- `browser_doctor`
-
-## Configuration
-
-Copy `.env.example` values into your own environment or ignored local configuration. Never commit API keys, institutional credentials, cookies, or browser profiles.
-
-OpenAlex changed its API policy on 2026-02-13 and now requires a free key on every request. Set `OPENALEX_API_KEY`; otherwise that source is reported as `blocked_configuration` while the remaining sources continue. `SEMANTIC_SCHOLAR_API_KEY`, `OPENCITATIONS_ACCESS_TOKEN`, and `NCBI_API_KEY` are optional but improve isolation from shared rate limits. Unpaywall requires `UNPAYWALL_EMAIL` or the shared `SCANSCI_FIND_CONTACT_EMAIL`. Contact variables are used for responsible API identification, and transient 429/5xx responses use bounded exponential backoff.
-
-Source loops, identifier verification, and per-DOI OA resolution run in parallel by default (up to 8 workers). Set `SCANSCI_FIND_SEARCH_WORKERS` (source loops and verification) or `SCANSCI_FIND_OA_WORKERS` (Unpaywall lookups) to `1` for strictly serial behavior. Citation expansion remains serial because the OpenCitations rate limiter holds per-instance state; saturation now requires consecutive below-threshold rounds (`saturation_consecutive_rounds`, default 2).
-
-Query terms are expanded deterministically before variant generation: built-in abbreviation/full-form pairs (LLM↔large language model, MRI↔magnetic resonance imaging, ...) apply bidirectionally, plus small per-domain synonym tables. Expansion never renames or drops a user term, so protocol fingerprints stay stable. Add your own vocabulary as JSON files (`{"pairs": {...}, "synonyms": {...}}`) in the directory named by `SCANSCI_FIND_VOCAB_DIR`.
-
-Sorting: `--sort relevance|recency|citations`. Recency flags papers published in the last 6 months as `[新]` and places them first; boost/hard quality semantics are orthogonal to the sort.
-
-CDP sources (Google Scholar, CNKI) need `pip install scansci-find[cdp]` and a Chrome with remote debugging enabled; without either they report `blocked_configuration` and the remaining sources continue. `scansci-find browser-doctor` now reports a `cdp_chrome` candidate.
-
-CNKI remains compatible with the previous variable:
+- `OPENALEX_API_KEY`：OpenAlex 自 2026-02-13 起每个请求都需要免费 key；缺失时该源报告 `blocked_configuration`，其余源继续。
+- `UNPAYWALL_EMAIL` 或 `SCANSCI_FIND_CONTACT_EMAIL`：Unpaywall 解析必需；联系邮箱用于负责任的 API 识别。
+- 并发：源循环与验证默认 8 worker（`SCANSCI_FIND_SEARCH_WORKERS`），Unpaywall 并发 `SCANSCI_FIND_OA_WORKERS`；设为 `1` 强制串行。引文扩展保持串行（OpenCitations 限速器为实例状态）。
+- `SCANSCI_FIND_VOCAB_DIR`：自定义 query 扩展词表（`{"pairs": {...}, "synonyms": {...}}` JSON）。
+- CDP 源（Google Scholar / CNKI）需要 `pip install scansci-find[cdp]` 与开启远程调试的 Chrome（`chrome://inspect/#remote-debugging`）；否则优雅降级为 `blocked_configuration`。`scansci-find browser-doctor` 会报告 `cdp_chrome` 候选。
+- CNKI 兼容既有变量：
 
 ```powershell
 $env:SCANSCI_FIND_CNKI_MCP_COMMAND='["uvx","--from","git+https://github.com/h-lu/cnki-mcp","cnki-mcp"]'
 ```
 
-## Compatibility
+## 合规边界 / Compliance
 
-Existing `scansci-find search`, `search_science`, legacy candidate fields, Journal Scout policies, and ScanSci PDF queues are preserved. See `docs/migration-v0.2.md` for the domain-neutral foundation and `docs/migration-v0.3.md` for staged retrieval, citation, verification, and OA additions.
+- 不绕过付费墙、验证码、登录、机构访问或出版商管控 / no paywall, captcha, login, or publisher-control bypass。
+- CDP 源驱动用户自己的 Chrome，不接触任何凭证；遇 CAPTCHA 即停，单会话有检索预算 / CDP drives your own Chrome, stops on CAPTCHA, bounded per-session budget。
+- JCR / CCF / 中科院分区等商业或版权数据不内置，由用户自行提供 / commercially licensed ranking data is never bundled。
+- 不下载：全文获取交给 ScanSci PDF，本层只产出队列与访问证据 / this layer never downloads; ScanSci PDF does.
 
-## Acknowledgements
+## 兼容性 / Compatibility
 
-The retrieval protocol, measurement machinery, and browser-source designs in
-this project were informed by two open-source projects:
+既有 `scansci-find search`、`search_science`、候选字段、Journal Scout 策略与 ScanSci PDF 队列全部保留。参见 `docs/migration-v0.2.md`（领域中立基础）与 `docs/migration-v0.3.md`（分阶段检索、引文、验证、OA）。
 
-- [lit-search](https://github.com/luwill/research-skills) — protocol-first
-  high-recall retrieval with gold-set recall, saturation criteria, and
-  PRISMA honesty; its documented coverage measurements motivated our
-  reproducible `benchmark` command.
-- [Academic-Search](https://github.com/ustc-ai4science/academic-search) —
-  CDP-driven reuse of the user's own Chrome login state for Google Scholar
-  and CNKI, the two-pass explore/deep-fetch flow, and the full-text status
-  taxonomy.
+## 致谢 / Acknowledgements
 
-Both are MIT-licensed; this project re-implements and extends those ideas in
-its own engine rather than embedding their code.
+本项目的检索协议、测量机制与浏览器源设计受两个开源项目启发：
+
+The retrieval protocol, measurement machinery, and browser-source designs in this project were informed by two open-source projects:
+
+- [lit-search](https://github.com/luwill/research-skills) — 协议先行的查全检索、金标准召回、饱和判据与 PRISMA 诚实；其记录在案的覆盖率测量促成了我们可复现的 `benchmark` 命令 / protocol-first high-recall retrieval with gold-set recall, saturation criteria, and PRISMA honesty; its documented coverage measurements motivated our reproducible `benchmark` command。
+- [Academic-Search](https://github.com/ustc-ai4science/academic-search) — 复用用户自己 Chrome 登录态的 CDP 方案、两遍 explore/deep-fetch 流程与全文状态分类 / CDP-driven reuse of the user's own Chrome login state, the two-pass explore/deep-fetch flow, and the full-text status taxonomy。
+
+两者均为 MIT 许可；本项目在自己的引擎里重实现并扩展了这些思路，而非内嵌它们的代码。
+
+Both are MIT-licensed; this project re-implements and extends those ideas in its own engine rather than embedding their code.
+
+## 许可 / License
+
+MIT
