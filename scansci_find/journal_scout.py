@@ -154,3 +154,83 @@ class FixtureJournalScoutGateway:
 
     def explain_journal(self, candidate: Dict[str, Any], policy: Optional[str] = None, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
         return self._results[0] if self._results else {}
+
+
+UNSCREENED_REASON = "Journal Scout not installed: journal-level screening skipped"
+
+
+class UnavailableJournalScoutGateway:
+    """Stand-in when Journal Scout (a private component) is not installed.
+
+    Every paper passes unscreened, so "hard" quality mode cannot drop all
+    results and the uniform "boost" leaves the ranking unchanged. The quality
+    block says explicitly that no journal evidence was applied.
+    """
+
+    version = ""
+    data_sha256 = ""
+
+    def __init__(self, reason: str = UNSCREENED_REASON) -> None:
+        self.reason = reason
+
+    def health_check(self) -> Dict[str, Any]:
+        return {"available": False, "server_version": "", "message": self.reason}
+
+    def screen_papers(self, papers: List[Dict[str, Any]], policy: Optional[str] = None, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        row = {"passed": True, "policy_result": {"policy": "unscreened", "pass": True, "reasons": [self.reason]}}
+        return {"papers": [dict(row) for _ in papers]}
+
+    def explain_journal(self, candidate: Dict[str, Any], policy: Optional[str] = None, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return {"available": False, "message": self.reason}
+
+
+class ResilientJournalScoutGateway:
+    """Use Journal Scout, but fall back to unscreened results if a call fails."""
+
+    def __init__(self, primary: Any) -> None:
+        self.primary = primary
+        self.fallback: Optional[UnavailableJournalScoutGateway] = None
+
+    @property
+    def version(self) -> str:
+        return getattr(self.primary, "version", "")
+
+    @property
+    def data_sha256(self) -> str:
+        return getattr(self.primary, "data_sha256", "")
+
+    def _call(self, name: str, *args: Any, **kwargs: Any) -> Dict[str, Any]:
+        if self.fallback is None:
+            try:
+                return getattr(self.primary, name)(*args, **kwargs)
+            except Exception as exc:  # broken install, missing data, crashed server
+                print(f"scansci-find: Journal Scout unavailable ({exc}); results are unscreened", file=sys.stderr)
+                self.fallback = UnavailableJournalScoutGateway(f"{UNSCREENED_REASON} ({exc})")
+        return getattr(self.fallback, name)(*args, **kwargs)
+
+    def health_check(self) -> Dict[str, Any]:
+        return self._call("health_check")
+
+    def screen_papers(self, papers: List[Dict[str, Any]], policy: Optional[str] = None, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return self._call("screen_papers", papers, policy=policy, filters=filters)
+
+    def explain_journal(self, candidate: Dict[str, Any], policy: Optional[str] = None, filters: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+        return self._call("explain_journal", candidate, policy=policy, filters=filters)
+
+
+def default_journal_gateway() -> Any:
+    """Journal Scout when installed, otherwise an explicit unscreened stand-in.
+
+    Journal Scout is a private component (its journal data is licensed), so a
+    public install usually lacks it. SCANSCI_FIND_JOURNAL_SCOUT=off forces the
+    stand-in even when it is installed.
+    """
+    import importlib.util
+
+    if os.environ.get("SCANSCI_FIND_JOURNAL_SCOUT", "").strip().lower() in {"0", "off", "false", "no"}:
+        return UnavailableJournalScoutGateway("Journal Scout disabled (SCANSCI_FIND_JOURNAL_SCOUT=off)")
+    primary = JournalScoutMcpGateway()
+    installed = importlib.util.find_spec("journal_scout_mcp") is not None or Path(primary.cwd).exists()
+    if not installed:
+        return UnavailableJournalScoutGateway()
+    return ResilientJournalScoutGateway(primary)

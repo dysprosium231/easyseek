@@ -16,7 +16,7 @@ from scansci_find.browser_discovery import doctor as browser_discovery_doctor
 from scansci_find.citation_graph import build_citation_provider, expand_citations as expand_citation_graph
 from scansci_find.dedupe import dedupe_candidates, dedupe_with_clusters
 from scansci_find.evidence import attach_evidence_dimensions
-from scansci_find.journal_scout import JournalScoutMcpGateway
+from scansci_find.journal_scout import default_journal_gateway
 from scansci_find.outputs import build_download_queue, enrich_download_metadata
 from scansci_find.preprint import PreprintFinder, find_preprints as find_preprints_batch
 from scansci_find.protocol import build_protocol
@@ -74,7 +74,7 @@ class ScanSciFindService:
         preprint_finder: Optional[Any] = None,
         pwc_provider: Optional[Any] = None,
     ) -> None:
-        self.journal_gateway = journal_gateway or JournalScoutMcpGateway()
+        self.journal_gateway = journal_gateway or default_journal_gateway()
         self.providers = providers
         self.identifier_verifier = identifier_verifier
         self.oa_resolver = oa_resolver
