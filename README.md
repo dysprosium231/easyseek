@@ -80,8 +80,8 @@ question -> protocol -> volume estimate -> 4-record smoke test
 与 ScanSci PDF 形成闭环：
 
 ```powershell
-scansci-pdf manifest runs/x/oa_manifest.json --output runs/x/pdfs   # 按 manifest 路由下载
-scansci-pdf batch queue.txt --scihub --runs-dir runs/x              # 队列 + 预印本兜底（付费墙失败自动用 arXiv 版重试）
+litloop manifest runs/x/oa_manifest.json --output runs/x/pdfs   # 按 manifest 路由下载
+litloop batch queue.txt --scihub --runs-dir runs/x              # 队列 + 预印本兜底（付费墙失败自动用 arXiv 版重试）
 scansci-find reconcile runs/x                                       # 下载结果回写候选：downloaded / anti_bot_blocked / html_not_pdf
 ```
 

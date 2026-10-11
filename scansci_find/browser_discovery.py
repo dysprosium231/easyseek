@@ -23,9 +23,13 @@ def _default_system_browser_paths() -> List[str]:
 
 def _default_scansci_pdf_roots(env: Dict[str, str]) -> List[str]:
     roots = []
-    if env.get("SCANSCI_PDF_REPO"):
-        roots.append(env["SCANSCI_PDF_REPO"])
-    roots.extend([r"D:\scansci-pdf", r"D:\VSP\scansci-pdf"])
+    for key in ("LITLOOP_REPO", "SCANSCI_PDF_REPO"):
+        if env.get(key):
+            roots.append(env[key])
+    # LitLoop (dysprosium231/litloop-paper-agent) is the renamed scansci-pdf.
+    home = Path(env.get("USERPROFILE") or env.get("HOME") or Path.home())
+    roots.extend([r"D:\litloop-paper-agent", str(home / "plugins" / "litloop-paper-agent"),
+                  r"D:\scansci-pdf", r"D:\VSP\scansci-pdf"])
     return roots
 
 
@@ -162,8 +166,9 @@ class BrowserRuntimeResolver:
         for root in self.scansci_pdf_roots:
             base = Path(root)
             module_paths = [
-                base / "src" / "scansci_pdf" / "browser_engine.py",
-                base / "src" / "scansci_pdf" / "browser_cookies.py",
+                base / "src" / package / name
+                for package in ("litloop", "scansci_pdf")
+                for name in ("browser_engine.py", "browser_cookies.py")
             ]
             for module_path in module_paths:
                 if self.path_exists(str(module_path)):

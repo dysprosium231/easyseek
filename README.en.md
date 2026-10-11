@@ -80,8 +80,8 @@ The protocol separates four concepts that older search tools often blur:
 Closed loop with ScanSci PDF:
 
 ```powershell
-scansci-pdf manifest runs/x/oa_manifest.json --output runs/x/pdfs   # manifest-routed downloads
-scansci-pdf batch queue.txt --scihub --runs-dir runs/x              # queue + preprint fallbacks (failed paywalled DOIs retry their arXiv versions)
+litloop manifest runs/x/oa_manifest.json --output runs/x/pdfs   # manifest-routed downloads
+litloop batch queue.txt --scihub --runs-dir runs/x              # queue + preprint fallbacks (failed paywalled DOIs retry their arXiv versions)
 scansci-find reconcile runs/x                                       # write download outcomes back: downloaded / anti_bot_blocked / html_not_pdf
 ```
 
