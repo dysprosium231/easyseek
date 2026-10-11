@@ -190,6 +190,7 @@ def normalize_openalex_work(work: Dict[str, Any]) -> Candidate:
         issn=str(source.get("issn_l") or (issns[0] if issns else "")),
         eissn=str(issns[1] if len(issns) > 1 else ""),
         source="OpenAlex",
+        abstract=_openalex_abstract(work.get("abstract_inverted_index")),
         relevance_score=float(work.get("relevance_score") or 0.0),
         citation_count=int(work.get("cited_by_count") or 0),
         published_date=str(work.get("publication_date") or "").strip(),
@@ -233,6 +234,7 @@ def normalize_semantic_paper(paper: Dict[str, Any]) -> Candidate:
         arxiv_id=external.get("ArXiv") or "",
         journal=str((paper.get("journal") or {}).get("name") or ""),
         source="Semantic Scholar",
+        abstract=str(paper.get("abstract") or ""),
         relevance_score=float(paper.get("citationCount") or 0.0),
         citation_count=int(paper.get("citationCount") or 0),
         published_date=str(paper.get("publicationDate") or "").strip(),
@@ -518,8 +520,30 @@ def normalize_kaggle_dataset(dataset: Dict[str, Any]) -> Candidate:
     ) | {"data_evidence": evidence}
 
 
+def _year_range() -> tuple[Optional[int], Optional[int]]:
+    """Publication-year bounds for this run (set by the CLI); None = open."""
+    def _int(name: str) -> Optional[int]:
+        value = str(os.environ.get(name) or "").strip()
+        return int(value) if value.isdigit() else None
+    return _int("SCANSCI_FIND_YEAR_FROM"), _int("SCANSCI_FIND_YEAR_TO")
+
+
+def _openalex_abstract(inverted: Any) -> str:
+    """Rebuild text from OpenAlex's abstract_inverted_index."""
+    if not isinstance(inverted, dict) or not inverted:
+        return ""
+    slots: Dict[int, str] = {}
+    for word, positions in inverted.items():
+        for pos in positions or []:
+            if isinstance(pos, int):
+                slots[pos] = str(word)
+    return " ".join(slots[i] for i in sorted(slots))
+
+
 class HttpProvider:
     name = ""
+    # A 429 is retried this many times in total; None = the global attempts.
+    rate_limit_attempts: Optional[int] = None
 
     def __init__(self) -> None:
         self.last_search_metadata: Dict[str, Any] = {}
@@ -552,6 +576,8 @@ class HttpProvider:
                     raise ProviderNotFoundError(f"{self.name or 'source'} record was not found") from exc
                 if exc.code not in retryable:
                     raise ProviderError(f"{self.name or 'source'} request failed with HTTP {exc.code}") from exc
+                if exc.code == 429 and self.rate_limit_attempts is not None and attempt + 1 >= self.rate_limit_attempts:
+                    raise ProviderRateLimitError(f"{self.name or 'source'} is rate-limited (no API key; skipped)") from exc
                 if attempt + 1 >= attempts:
                     if exc.code == 429:
                         raise ProviderRateLimitError(f"{self.name or 'source'} remained rate-limited after {attempts} attempts") from exc
@@ -610,6 +636,14 @@ class OpenAlexProvider(HttpProvider):
                 "cursor": cursor,
                 "api_key": api_key,
             }
+            year_from, year_to = _year_range()
+            filters = []
+            if year_from:
+                filters.append(f"from_publication_date:{year_from}-01-01")
+            if year_to:
+                filters.append(f"to_publication_date:{year_to}-12-31")
+            if filters:
+                params["filter"] = ",".join(filters)
             url = "https://api.openalex.org/works?" + urllib.parse.urlencode(params)
             payload = self._json(url)
             page_rows = payload.get("results") or []
@@ -637,6 +671,14 @@ class CrossrefProvider(HttpProvider):
     def search(self, query: str, limit: int) -> List[Candidate]:
         requested = max(1, int(limit))
         params: Dict[str, Any] = {"query": query, "rows": min(requested, 1000), "cursor": "*"}
+        year_from, year_to = _year_range()
+        filters = []
+        if year_from:
+            filters.append(f"from-pub-date:{year_from}")
+        if year_to:
+            filters.append(f"until-pub-date:{year_to}")
+        if filters:
+            params["filter"] = ",".join(filters)
         contact = os.environ.get("CROSSREF_MAILTO") or os.environ.get("SCANSCI_FIND_CONTACT_EMAIL")
         if contact:
             params["mailto"] = contact
@@ -671,15 +713,21 @@ class SemanticScholarProvider(HttpProvider):
     name = "semantic"
 
     def search(self, query: str, limit: int) -> List[Candidate]:
-        fields = "title,year,authors,externalIds,journal,openAccessPdf,url,citationCount,publicationDate"
+        fields = "title,year,authors,externalIds,journal,openAccessPdf,url,citationCount,publicationDate,abstract"
         requested = max(1, int(limit))
         api_key = str(os.environ.get("SEMANTIC_SCHOLAR_API_KEY") or "").strip()
+        # The shared keyless pool is throttled most of the time; waiting out
+        # Retry-After stalled whole searches for over a minute.
+        self.rate_limit_attempts = None if api_key else 1
+        year_from, year_to = _year_range()
+        year_param = f"{year_from or ''}-{year_to or ''}" if (year_from or year_to) else ""
         rows: List[Dict[str, Any]] = []
         total_available: Optional[int] = None
         while len(rows) < requested:
             page_size = min(100, requested - len(rows))
             url = "https://api.semanticscholar.org/graph/v1/paper/search?" + urllib.parse.urlencode(
-                {"query": query, "limit": page_size, "offset": len(rows), "fields": fields}
+                {"query": query, "limit": page_size, "offset": len(rows), "fields": fields,
+                 **({"year": year_param} if year_param else {})}
             )
             payload = self._json(url, headers={"x-api-key": api_key} if api_key else None)
             page_rows = payload.get("data") or []

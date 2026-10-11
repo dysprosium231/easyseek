@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -248,6 +249,13 @@ def _emit_payload(payload: Dict[str, Any], out: Optional[str] = None) -> None:
 def run_search(args: argparse.Namespace) -> int:
     quality, mode = resolve_quality_and_mode(args)
     year_from, year_to = resolve_years(args)
+    # Sources filter by year at query time (adapters._year_range), so the
+    # per-source page is spent on in-range records instead of post-filtered.
+    for name, value in (("SCANSCI_FIND_YEAR_FROM", year_from), ("SCANSCI_FIND_YEAR_TO", year_to)):
+        if value:
+            os.environ[name] = str(value)
+        else:
+            os.environ.pop(name, None)
     selected_sources = resolve_sources(args)
     domain = resolve_domain(args)
     if args.fixture:
