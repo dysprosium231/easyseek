@@ -178,7 +178,9 @@ DOMAIN_PROFILES: Dict[str, Dict[str, object]] = {
 
 
 DEPTH_PROFILES: Dict[str, Dict[str, object]] = {
-    "quick": {"max_records_per_source": 20, "citation_rounds": 0, "tiers": ["core"]},
+    # quick = one query, no citation chasing; the caller's --limit decides how many
+    # records (the cap only stops runaway requests).
+    "quick": {"max_records_per_source": 100, "citation_rounds": 0, "tiers": ["core"]},
     "standard": {"max_records_per_source": 100, "citation_rounds": 1, "tiers": ["core", "domain"]},
     "systematic": {"max_records_per_source": 500, "citation_rounds": 3, "tiers": ["core", "domain", "supplemental"]},
 }
